@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any
+
+from .api import CreditBudget, DunkAPIClient
+from .db import SupabaseDatabase
+from .mappings import (
+    game_record,
+    odds_records,
+    parse_datetime,
+    payload_sha256,
+    player_records,
+    team_record,
+    team_stats_records,
+    utc_now,
+)
+
+
+class NBACollector:
+    def __init__(self, api: DunkAPIClient, db: SupabaseDatabase, budget: CreditBudget) -> None:
+        self.api = api
+        self.db = db
+        self.budget = budget
+        self.totals = {"teams": 0, "games": 0, "team_stats": 0, "players": 0, "player_stats": 0, "odds": 0}
+
+    def _api_import(
+        self,
+        endpoint: str,
+        params: dict[str, Any],
+        writer,
+        fallback_credits: int,
+    ) -> tuple[dict[str, Any], int]:
+        run_id = self.db.start_ingestion(endpoint, params)
+        try:
+            data, headers = self.api.post(endpoint, params)
+            inserted, updated, received, metadata = writer(data, run_id)
+            self.db.save_payload(run_id, endpoint, params, data, payload_sha256(data))
+            actual_credits = int(headers.get("x-credits-used", fallback_credits))
+            self.db.finish_ingestion(
+                run_id,
+                records_received=received,
+                records_inserted=inserted,
+                records_updated=updated,
+                credits=actual_credits,
+                metadata=metadata,
+            )
+            return data, actual_credits
+        except Exception as exc:
+            self.db.fail_ingestion(run_id, str(exc), {"request_params": params})
+            raise
+
+    def sync_teams(self, season: int) -> int:
+        def writer(data: dict[str, Any], run_id: int):
+            teams = data.get("teams") or []
+            records = [record for team in teams if (record := team_record(team))]
+            inserted, updated = self.db.upsert_many("nba_teams", records)
+            self.totals["teams"] += len(records)
+            return inserted, updated, len(teams), {"season": season, "teams_received": len(teams)}
+
+        self._api_import("list_teams", {"season": season, "league": "nba"}, writer, 1)
+        return self.totals["teams"]
+
+    def sync_games(
+        self,
+        seasons: range,
+        season_type: str,
+        max_games: int,
+        status_filter: str | None = "final",
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        imported: list[dict[str, Any]] = []
+        for season in seasons:
+            offset = 0
+            while len(imported) < max_games:
+                limit = min(page_size, max_games - len(imported))
+                params = {
+                    "season": season,
+                    "season_type": season_type,
+                    "limit": limit,
+                    "offset": offset,
+                    "league": "nba",
+                }
+                if status_filter is not None:
+                    params["status"] = status_filter
+
+                def writer(data: dict[str, Any], run_id: int):
+                    games = data.get("games") or []
+                    game_rows: list[dict[str, Any]] = []
+                    team_rows: dict[str, dict[str, Any]] = {}
+                    for game in games:
+                        home = game.get("home") or {}
+                        away = game.get("away") or {}
+                        for team in (home, away):
+                            record = team_record(team)
+                            if record:
+                                team_rows[record["team_provider_id"]] = record
+                        game_rows.append(game_record(game, fallback_season=season))
+                    team_inserted, team_updated = self.db.upsert_many("nba_teams", list(team_rows.values()))
+                    game_inserted, game_updated = self.db.upsert_many("nba_games", game_rows)
+                    self.totals["games"] += len(game_rows)
+                    self.totals["teams"] += len(team_rows)
+                    return (
+                        team_inserted + game_inserted,
+                        team_updated + game_updated,
+                        len(games),
+                        {"season": season, "offset": offset, "games_received": len(games), "next_offset": data.get("next_offset")},
+                    )
+
+                data, _ = self._api_import("list_games", params, writer, 2)
+                page = data.get("games") or []
+                for game in page:
+                    try:
+                        imported.append(game_record(game, fallback_season=season))
+                    except ValueError:
+                        # Malformed entries are recorded in raw payload, but never inserted into core tables.
+                        continue
+                next_offset = data.get("next_offset")
+                if not page or next_offset is None or int(next_offset) <= offset:
+                    break
+                offset = int(next_offset)
+            if len(imported) >= max_games:
+                break
+        return imported[:max_games]
+
+    def sync_game_details(self, games: list[dict[str, Any]]) -> None:
+        for game in games:
+            game_id = game["game_provider_id"]
+            params = {"game_id": game_id, "league": "nba"}
+
+            def writer(data: dict[str, Any], run_id: int):
+                game_obj = data.get("game") or {}
+                if game_obj:
+                    # Detailed game payload is authoritative for final scores/status.
+                    g_record = game_record(game_obj, fallback_season=game.get("season_end_year"))
+                    home = game_obj.get("home") or {}
+                    away = game_obj.get("away") or {}
+                    team_rows = [record for team in (home, away) if (record := team_record(team))]
+                    ti, tu = self.db.upsert_many("nba_teams", team_rows)
+                    gi, gu = self.db.upsert_many("nba_games", [g_record])
+                else:
+                    ti = tu = gi = gu = 0
+
+                team_rows_stats = team_stats_records(game_id, data.get("team_stats") or [])
+                tsi, tsu = self.db.upsert_many("nba_team_game_stats", team_rows_stats)
+                player_rows, stat_rows = player_records(data.get("players") or [])
+                pi, pu = self.db.upsert_many("nba_players", player_rows)
+                # Attach the game FK after normalizing the raw player lines.
+                for row in stat_rows:
+                    row["game_provider_id"] = game_id
+                psi, psu = self.db.upsert_many("nba_player_game_stats", stat_rows)
+
+                self.totals["team_stats"] += len(team_rows_stats)
+                self.totals["players"] += len(player_rows)
+                self.totals["player_stats"] += len(stat_rows)
+                return (
+                    ti + gi + tsi + pi + psi,
+                    tu + gu + tsu + pu + psu,
+                    len(team_rows_stats) + len(player_rows),
+                    {
+                        "game_provider_id": game_id,
+                        "team_stats_received": len(team_rows_stats),
+                        "players_received": len(player_rows),
+                    },
+                )
+
+            self._api_import("get_game", params, writer, 5)
+
+    def sync_odds(self, games: list[dict[str, Any]]) -> None:
+        by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for game in games:
+            by_date[game["game_date"].isoformat()].append(game)
+
+        for game_date, date_games in sorted(by_date.items()):
+            if len(date_games) > 1:
+                params = {"date": game_date, "league": "nba"}
+                fallback_credits = 10
+            else:
+                params = {"game_id": date_games[0]["game_provider_id"], "league": "nba"}
+                fallback_credits = 5
+
+            def writer(data: dict[str, Any], run_id: int):
+                odds_games = data.get("games") or []
+                if not odds_games and data.get("game_id"):
+                    odds_games = [data]
+                game_rows: list[dict[str, Any]] = []
+                teams: dict[str, dict[str, Any]] = {}
+                odds_rows: list[dict[str, Any]] = []
+                for odds_game in odds_games:
+                    home = odds_game.get("home") or {}
+                    away = odds_game.get("away") or {}
+                    for team in (home, away):
+                        rec = team_record(team)
+                        if rec:
+                            teams[rec["team_provider_id"]] = rec
+                    gid = str(odds_game.get("game_id") or "")
+                    if gid:
+                        try:
+                            game_rows.append(game_record(odds_game))
+                        except ValueError:
+                            pass
+                        odds_rows.extend(odds_records(odds_game, odds_game.get("books") or [], fetched_at=utc_now()))
+                ti, tu = self.db.upsert_many("nba_teams", list(teams.values()))
+                gi, gu = self.db.upsert_many("nba_games", game_rows)
+                oi, ou = self.db.upsert_many("nba_odds_snapshots", odds_rows)
+                self.totals["odds"] += len(odds_rows)
+                return (
+                    ti + gi + oi,
+                    tu + gu + ou,
+                    len(odds_rows),
+                    {"date": game_date, "games_received": len(odds_games), "odds_rows_received": len(odds_rows)},
+                )
+
+            self._api_import("get_odds", params, writer, fallback_credits)
+
+    def collect(
+        self,
+        seasons: range,
+        season_type: str = "regular",
+        max_games: int = 10,
+        include_stats: bool = True,
+        include_odds: bool = True,
+        status_filter: str | None = "final",
+    ) -> dict[str, Any]:
+        season_list = list(seasons)
+        if not season_list:
+            raise ValueError("At least one season is required.")
+        self.sync_teams(season_list[-1])
+        games = self.sync_games(season_list, season_type, max_games, status_filter=status_filter)
+        completed_games = [game for game in games if game["game_status"] == "final"]
+        if include_stats and completed_games:
+            self.sync_game_details(completed_games)
+        if include_odds:
+            self.sync_odds(games)
+        return {
+            "season_end_years": season_list,
+            "season_type": season_type,
+            "status_filter": status_filter or "all",
+            "games_selected": len(games),
+            "completed_games_for_stats": len(completed_games),
+            "credits_used_local_estimate": self.budget.used,
+            "credits_remaining_in_run_budget": self.budget.remaining,
+            **self.totals,
+        }
