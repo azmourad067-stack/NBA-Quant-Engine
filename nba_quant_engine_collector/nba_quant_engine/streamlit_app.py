@@ -455,7 +455,7 @@ def render_collector(settings: Settings) -> None:
         with c3:
             max_games = st.number_input(
                 "Nombre maximal de matchs", min_value=1, max_value=100,
-                value=10, step=1,
+                value=25, step=1,
             )
 
         d1, d2, d3 = st.columns(3)
@@ -474,6 +474,7 @@ def render_collector(settings: Settings) -> None:
             status = st.selectbox(
                 "Statut des matchs",
                 ["final", "scheduled", "all"],
+                index=1,
                 format_func=lambda value: {
                     "final": "Terminés",
                     "scheduled": "À venir",
@@ -488,7 +489,7 @@ def render_collector(settings: Settings) -> None:
             )
 
         include_stats = st.checkbox(
-            "Importer les box-scores (matchs terminés uniquement)", value=True
+            "Importer les box-scores (matchs terminés uniquement)", value=False
         )
         include_odds = st.checkbox("Importer les cotes disponibles", value=True)
         submitted = st.form_submit_button(
@@ -496,8 +497,9 @@ def render_collector(settings: Settings) -> None:
         )
 
     st.info(
-        "Réglages prudents par défaut : une saison, 10 matchs, 120 crédits maximum. "
-        "Augmentez les limites progressivement après avoir vérifié les premiers imports."
+        "Préconfiguration étape A : saison 2026–2027, matchs programmés, 25 matchs maximum, "
+        "box-scores désactivés, cotes activées et plafond de 120 crédits. "
+        "Vérifiez ces paramètres avant de lancer la collecte."
     )
 
     if submitted:
