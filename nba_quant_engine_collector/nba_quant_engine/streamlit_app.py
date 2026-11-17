@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
 
-APP_BUILD_LABEL = "nba-pregame-engine-v0.3-historical-credit-safe-2026-11-17"
+APP_BUILD_LABEL = "nba-historical-resumable-pagination-v0.4-2026-11-17"
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -454,8 +454,9 @@ def render_collector(settings: Settings) -> None:
             )
         with c3:
             max_games = st.number_input(
-                "Nombre maximal de matchs", min_value=1, max_value=100,
-                value=20, step=1,
+                "Nombre maximal de matchs à parcourir", min_value=1, max_value=5000,
+                value=5000, step=100,
+                help="Cap de sécurité par lancement. La pagination reprend automatiquement au dernier offset enregistré en base.",
             )
 
         d1, d2, d3 = st.columns(3)
@@ -497,11 +498,15 @@ def render_collector(settings: Settings) -> None:
         )
 
     st.info(
-        "Préconfiguration historique : saisons 2023–2024 à 2025–2026 incluses, matchs terminés, "
-        "20 matchs maximum, box-scores activés, cotes désactivées et plafond de 120 crédits. "
-        "Les matchs et box-scores déjà présents sont réutilisés ; les appels de détails sont "
-        "plafonnés selon les crédits restants. Une collecte interrompue par le plafond peut être "
-        "reprise plus tard sans recréer les mêmes matchs. Vérifiez ces paramètres avant de lancer."
+        "Préconfiguration historique : saisons régulières 2023–2024 à 2025–2026 incluses, "
+        "matchs terminés, jusqu'à 5 000 matchs parcourus par lancement, box-scores activés, "
+        "cotes désactivées et plafond de 120 crédits. Les pages de calendrier reprennent au "
+        "dernier offset sauvegardé dans nba_ingestion_runs. Le collecteur réserve 25 crédits "
+        "aux box-scores, puis enrichit en priorité les matchs terminés les plus anciens qui "
+        "n'ont pas encore leurs deux lignes équipes et leurs statistiques joueurs. Les matchs "
+        "déjà complets sont ignorés. Relancez la collecte pour poursuivre jusqu'à la fin des "
+        "trois saisons ; aucun doublon de match ou de box-score n'est attendu grâce aux clés "
+        "uniques et aux upserts. Les cotes historiques nécessitent une étape distincte."
     )
 
     if submitted:
@@ -551,10 +556,23 @@ def render_collector(settings: Settings) -> None:
             st.success("Collecte terminée.")
             st.caption(f"Identifiant unique de collecte : {collection_id}")
             result_cols = st.columns(4)
-            result_cols[0].metric("Matchs sélectionnés", report["games_selected"])
-            result_cols[1].metric("Équipes traitées", report["teams"])
-            result_cols[2].metric("Snapshots de cotes", report["odds"])
+            result_cols[0].metric("Matchs parcourus", report["games_selected"])
+            result_cols[1].metric("Pages calendrier", report["games_pages"])
+            result_cols[2].metric("Box-scores enrichis", report["completed_games_for_stats"])
             result_cols[3].metric("Crédits estimés", report["credits_used_local_estimate"])
+            if report["pagination_complete"]:
+                st.success("Pagination terminée : toutes les saisons sélectionnées ont été parcourues.")
+            else:
+                pending = ", ".join(str(season) for season in report["seasons_pending_pagination"])
+                st.warning(
+                    f"Pagination incomplète pour les saisons {pending}. "
+                    "Relancez la même collecte : elle reprendra aux offsets sauvegardés."
+                )
+            if report["final_games_pending_details"]:
+                st.info(
+                    f"{report['final_games_pending_details']} matchs terminés restent à enrichir "
+                    "en box-scores. Ils seront repris lors des prochaines collectes."
+                )
             with st.expander("Rapport détaillé", expanded=True):
                 st.json(report)
             st.caption(
