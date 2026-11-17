@@ -456,9 +456,9 @@ def render_collector(settings: Settings) -> None:
             )
         with c3:
             max_games = st.number_input(
-                "Nombre maximal de matchs à parcourir", min_value=1, max_value=5000,
+                "Limite de matchs traités par lancement", min_value=1, max_value=5000,
                 value=5000, step=100,
-                help="Cap de sécurité par lancement. La pagination reprend automatiquement au dernier offset enregistré en base.",
+                help="En mode box-scores uniquement, limite le nombre de get_game ; en mode calendrier, limite les matchs parcourus.",
             )
 
         d1, d2, d3 = st.columns(3)
