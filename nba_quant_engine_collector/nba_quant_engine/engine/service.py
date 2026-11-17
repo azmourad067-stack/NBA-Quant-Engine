@@ -140,9 +140,12 @@ def build_engine_report(db: Any, min_train_games: int = MIN_TRAIN_GAMES) -> dict
     rows = load_engine_dataset(db)
     report = evaluate_dataset(rows, min_train_games=min_train_games)
     report["upcoming"] = predict_upcoming_games(rows, min_train_games=min_train_games)
+    completed_rows = [r for r in rows if r.get("target_home_win") in (0, 1)]
+    upcoming_rows = [r for r in rows if r.get("target_home_win") is None]
     report["dataset"] = {
-        "games": len(rows),
-        "market_feature_coverage": sum(r.get("market_home_prob") is not None for r in rows),
+        "games": len(completed_rows),
+        "upcoming_games": len(upcoming_rows),
+        "market_feature_coverage": sum(r.get("market_home_prob") is not None for r in completed_rows),
         "feature_count": len(FEATURE_COLUMNS),
         "time_leakage_policy": "verified_point_in_time AND source_captured_at < scheduled_tipoff_at",
     }
