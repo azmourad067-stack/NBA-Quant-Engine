@@ -155,16 +155,16 @@ class SupabaseDatabase:
             raise RuntimeError("Database schema validation failed:\n- " + "\n- ".join(problems))
 
     def games_missing_details(self, game_ids: list[str]) -> set[str]:
-        """Return completed game IDs missing either team or player box-score rows."""
+        """Return game IDs without both team rows and at least one player stat row."""
         if not game_ids:
             return set()
         rows = self.conn.execute(
             sql.SQL("""select candidate.game_provider_id
                 from unnest(%s::text[]) as candidate(game_provider_id)
-                where not exists (
-                    select 1 from {}.nba_team_game_stats s
+                where (
+                    select count(*) from {}.nba_team_game_stats s
                     where s.game_provider_id = candidate.game_provider_id
-                )
+                ) < 2
                 or not exists (
                     select 1 from {}.nba_player_game_stats s
                     where s.game_provider_id = candidate.game_provider_id
@@ -175,6 +175,80 @@ class SupabaseDatabase:
             (game_ids,),
         ).fetchall()
         return {str(row["game_provider_id"]) for row in rows}
+
+    def get_game_pagination_state(
+        self,
+        seasons: list[int],
+        season_type: str,
+        status_filter: str | None,
+    ) -> dict[int, dict[str, Any]]:
+        """Load the latest durable list_games cursor for each requested season."""
+        if not seasons:
+            return {}
+        rows = self.conn.execute(
+            sql.SQL("""select distinct on ((request_params->>'season')::integer)
+                    (request_params->>'season')::integer as season,
+                    coalesce((metadata->>'pagination_complete')::boolean, false)
+                        as pagination_complete,
+                    coalesce(
+                        (metadata->>'next_offset')::integer,
+                        (request_params->>'offset')::integer + coalesce(records_received, 0)
+                    ) as next_offset
+                from {}.nba_ingestion_runs
+                where endpoint_name = 'list_games'
+                  and run_status = 'succeeded'
+                  and request_params->>'season' = any(%s::text[])
+                  and coalesce(request_params->>'season_type', 'regular') = %s
+                  and coalesce(request_params->>'status', 'all') = %s
+                order by (request_params->>'season')::integer,
+                         started_at desc, ingestion_run_id desc""").format(
+                sql.Identifier(self.schema)
+            ),
+            ([str(int(season)) for season in seasons], season_type, status_filter or "all"),
+        ).fetchall()
+
+        return {
+            int(row["season"]): {
+                "next_offset": int(row["next_offset"] or 0),
+                "complete": bool(row["pagination_complete"]),
+            }
+            for row in rows
+        }
+
+    def final_games_missing_details(
+        self,
+        seasons: list[int],
+        season_type: str = "regular",
+        limit: int = 10000,
+    ) -> list[dict[str, Any]]:
+        """Return the oldest completed games in the requested seasons needing box scores."""
+        if not seasons:
+            return []
+        safe_limit = max(1, min(int(limit), 10000))
+        rows = self.conn.execute(
+            sql.SQL("""select g.game_provider_id, g.season_end_year, g.season_type,
+                           g.game_date, g.game_status
+                from {}.nba_games g
+                where g.season_end_year = any(%s::smallint[])
+                  and g.season_type = %s
+                  and lower(g.game_status) = 'final'
+                  and (
+                    (select count(*) from {}.nba_team_game_stats t
+                     where t.game_provider_id = g.game_provider_id) < 2
+                    or not exists (
+                        select 1 from {}.nba_player_game_stats p
+                        where p.game_provider_id = g.game_provider_id
+                    )
+                  )
+                order by g.game_date asc, g.game_provider_id asc
+                limit %s""").format(
+                sql.Identifier(self.schema),
+                sql.Identifier(self.schema),
+                sql.Identifier(self.schema),
+            ),
+            ([int(season) for season in seasons], season_type, safe_limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def upsert_many(self, table: str, records: list[dict[str, Any]]) -> tuple[int, int]:
         if not records:
