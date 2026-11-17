@@ -17,7 +17,7 @@ L'ouverture de l'application ne déclenche aucune collecte. Les imports utilisen
 2. Sélectionner ce dépôt GitHub : azmourad067-stack/NBA-Quant-Engine.
 3. Choisir la branche feature/streamlit-dashboard.
 4. Définir le chemin du fichier principal :
-   nba_quant_engine_collector/nba_quant_engine/streamlit_app.py
+   streamlit_app.py (à la racine du dépôt)
 5. Dans les options avancées, sélectionner Python 3.12.
 6. Dans **App → Settings → Secrets**, ajouter les variables suivantes :
 
