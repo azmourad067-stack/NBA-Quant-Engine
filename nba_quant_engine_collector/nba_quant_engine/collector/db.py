@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import ipaddress
 import re
 from contextlib import contextmanager
 from typing import Any, Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
+from psycopg.conninfo import conninfo_to_dict
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -33,39 +33,56 @@ CONFLICT_KEYS = {
 }
 
 
-def psycopg_compatible_dsn(database_url: str) -> str:
-    """Normalize a Supabase URI for Psycopg/libpq without changing credentials.
+def supabase_connection_kwargs(database_url: str) -> dict[str, str]:
+    """Parse a Supabase PostgreSQL URI into safe Psycopg keyword arguments.
 
-    - Remove Prisma's pgbouncer=true flag (not a libpq URI parameter).
-    - Keep host= as a DNS name.
-    - Keep hostaddr= only when every supplied address is a valid IP literal.
-      libpq requires hostaddr to contain IP addresses, never DNS hostnames.
+    Supabase pooler hosts are DNS names. A DNS name belongs in host, while
+    libpq hostaddr accepts IP literals only. Discard hostaddr from the URI
+    and explicitly override PGHOSTADDR at connect time.
     """
-    parts = urlsplit(database_url)
-    query_items = parse_qsl(parts.query, keep_blank_values=True)
-    filtered: list[tuple[str, str]] = []
+    if not isinstance(database_url, str) or not database_url.strip():
+        raise ValueError("SUPABASE_DB_URL is empty.")
 
-    for key, value in query_items:
-        normalized_key = key.lower()
-        if normalized_key == "pgbouncer":
-            continue
-        if normalized_key == "hostaddr":
-            addresses = [item.strip().strip("[]") for item in value.split(",")]
-            try:
-                if not addresses or any(not address for address in addresses):
-                    continue
-                for address in addresses:
-                    ipaddress.ip_address(address)
-            except ValueError:
-                # A DNS name belongs in host=, not hostaddr=. Let libpq resolve host.
-                continue
-        filtered.append((key, value))
+    parts = urlsplit(database_url.strip())
+    if parts.scheme.lower() not in {"postgres", "postgresql"}:
+        raise ValueError(
+            "SUPABASE_DB_URL must begin with postgresql:// or postgres://."
+        )
 
-    if filtered == query_items:
-        return database_url
-    return urlunsplit(
-        (parts.scheme, parts.netloc, parts.path, urlencode(filtered), parts.fragment)
+    try:
+        hostname = parts.hostname
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("SUPABASE_DB_URL contains an invalid host or port.") from exc
+
+    if not hostname:
+        raise ValueError("SUPABASE_DB_URL does not contain a database host.")
+
+    # pgbouncer is not a libpq URI option. hostaddr is intentionally
+    # discarded even when it looks like an IP: use the Supabase DNS host.
+    safe_query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in {"pgbouncer", "hostaddr"}
+    ]
+    safe_uri = urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(safe_query), parts.fragment)
     )
+
+    try:
+        kwargs = conninfo_to_dict(safe_uri)
+    except Exception as exc:
+        # Never include the DSN in the error: it contains credentials.
+        raise ValueError(
+            "SUPABASE_DB_URL could not be parsed as a PostgreSQL URI."
+        ) from exc
+
+    kwargs.pop("hostaddr", None)
+    kwargs.pop("pgbouncer", None)
+    kwargs["host"] = hostname
+    if port is not None:
+        kwargs["port"] = str(port)
+    return kwargs
 
 class SupabaseDatabase:
     """Direct PostgreSQL writer. Uses the DB URI, not a Supabase API key."""
@@ -74,10 +91,11 @@ class SupabaseDatabase:
         if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", schema):
             raise ValueError("Invalid PostgreSQL schema name.")
         self.schema = schema
+        connection_kwargs = supabase_connection_kwargs(database_url)
+        # Explicit empty hostaddr overrides PGHOSTADDR inherited from the
+        # Streamlit runtime. libpq then resolves the DNS hostname in host=.
         self.conn = psycopg.connect(
-            psycopg_compatible_dsn(database_url),
-            # Explicitly override a stray PGHOSTADDR environment variable or
-            # a hostaddr accidentally left in the URI. Empty means: resolve host=.
+            **connection_kwargs,
             hostaddr="",
             row_factory=dict_row,
             connect_timeout=20,
