@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timezone
+
+from psycopg.types.json import Jsonb
 
 import numpy as np
 from psycopg import sql
@@ -14,6 +17,8 @@ from .dataset import FEATURE_COLUMNS, aggregate_verified_market_probabilities, b
 
 MIN_TRAIN_GAMES = 100
 MIN_TEST_GAMES = 25
+MODEL_NAME = "nba_logistic"
+MODEL_VERSION = "0.2.0-pit"
 
 
 def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
@@ -102,7 +107,7 @@ def evaluate_dataset(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAI
 
 
 
-def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAIN_GAMES) -> dict[str, Any]:
+def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAIN_GAMES, db: Any | None = None) -> dict[str, Any]:
     completed = [r for r in rows if r.get("target_home_win") in (0, 1)]
     upcoming = [r for r in rows if r.get("target_home_win") is None]
     if len(completed) < min_train_games:
@@ -123,6 +128,7 @@ def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MI
     model.fit(x_train, y_train)
     probabilities = model.predict_proba(x_future)[:, 1]
     predictions = []
+    predicted_at = datetime.now(timezone.utc).isoformat()
     for row, probability in zip(upcoming, probabilities):
         predictions.append({
             "game_provider_id": row["game_provider_id"],
@@ -133,14 +139,65 @@ def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MI
             "away_win_probability": float(1.0 - probability),
             "market_home_prob": row.get("market_home_prob"),
             "elo_home_prob": row["home_elo_prob"],
+            "features": {column: row.get(column) for column in FEATURE_COLUMNS},
+            "feature_cutoff_at": predicted_at,
+            "predicted_at": predicted_at,
+            "source_max_available_at": row.get("source_max_available_at"),
+            "feature_source_game_ids": row.get("feature_source_game_ids", []),
+            "model_name": MODEL_NAME,
+            "model_version": MODEL_VERSION,
         })
+    if db is not None:
+        persist_upcoming_predictions(db, predictions)
     return {"status": "predicted", "games": len(predictions), "predictions": predictions}
+
+
+def persist_upcoming_predictions(db: Any, predictions: list[dict[str, Any]]) -> int:
+    """Persist one immutable feature vector and paired moneyline predictions per game."""
+    schema = sql.Identifier(db.schema)
+    saved = 0
+    with db.conn.transaction():
+        for item in predictions:
+            snapshot_features = {
+                "feature_columns": FEATURE_COLUMNS,
+                "values": item["features"],
+                "source_game_ids": item["feature_source_game_ids"],
+            }
+            snapshot = db.conn.execute(
+                sql.SQL("""INSERT INTO {}.nba_feature_snapshots
+                    (game_provider_id, team_provider_id, feature_set_version,
+                     feature_cutoff_at, computed_at, source_max_available_at, features)
+                    VALUES (%s, NULL, %s, %s, %s, %s, %s)
+                    RETURNING feature_snapshot_id""").format(schema),
+                (item["game_provider_id"], MODEL_VERSION, item["feature_cutoff_at"],
+                 item["predicted_at"], item["source_max_available_at"], Jsonb(snapshot_features)),
+            ).fetchone()
+            quality = "partial" if item["source_max_available_at"] is None else "verified"
+            for selection, probability in (
+                ("home", item["home_win_probability"]),
+                ("away", item["away_win_probability"]),
+            ):
+                db.conn.execute(
+                    sql.SQL("""INSERT INTO {}.nba_predictions
+                        (game_provider_id, feature_snapshot_id, model_name, model_version,
+                         market_type, selection, predicted_probability, predicted_at,
+                         feature_cutoff_at, data_quality_status, prediction_payload)
+                        VALUES (%s, %s, %s, %s, 'moneyline', %s, %s, %s, %s, %s, %s)""").format(schema),
+                    (item["game_provider_id"], snapshot["feature_snapshot_id"], MODEL_NAME,
+                     MODEL_VERSION, selection, probability, item["predicted_at"],
+                     item["feature_cutoff_at"], quality,
+                     Jsonb({"elo_home_prob": item["elo_home_prob"],
+                            "market_home_prob": item["market_home_prob"],
+                            "source_game_ids": item["feature_source_game_ids"]})),
+                )
+            saved += 1
+    return saved
 
 
 def build_engine_report(db: Any, min_train_games: int = MIN_TRAIN_GAMES) -> dict[str, Any]:
     rows = load_engine_dataset(db)
     report = evaluate_dataset(rows, min_train_games=min_train_games)
-    report["upcoming"] = predict_upcoming_games(rows, min_train_games=min_train_games)
+    report["upcoming"] = predict_upcoming_games(rows, min_train_games=min_train_games, db=db)
     completed_rows = [r for r in rows if r.get("target_home_win") in (0, 1)]
     upcoming_rows = [r for r in rows if r.get("target_home_win") is None]
     report["dataset"] = {
