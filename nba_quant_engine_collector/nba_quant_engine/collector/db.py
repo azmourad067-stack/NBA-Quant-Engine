@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -33,14 +34,38 @@ CONFLICT_KEYS = {
 
 
 def psycopg_compatible_dsn(database_url: str) -> str:
-    """Remove Prisma-specific pgbouncer=true; Psycopg uses prepare_threshold instead."""
+    """Normalize a Supabase URI for Psycopg/libpq without changing credentials.
+
+    - Remove Prisma's pgbouncer=true flag (not a libpq URI parameter).
+    - Keep host= as a DNS name.
+    - Keep hostaddr= only when every supplied address is a valid IP literal.
+      libpq requires hostaddr to contain IP addresses, never DNS hostnames.
+    """
     parts = urlsplit(database_url)
     query_items = parse_qsl(parts.query, keep_blank_values=True)
-    filtered = [(key, value) for key, value in query_items if key.lower() != "pgbouncer"]
-    if len(filtered) == len(query_items):
-        return database_url
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(filtered), parts.fragment))
+    filtered: list[tuple[str, str]] = []
 
+    for key, value in query_items:
+        normalized_key = key.lower()
+        if normalized_key == "pgbouncer":
+            continue
+        if normalized_key == "hostaddr":
+            addresses = [item.strip().strip("[]") for item in value.split(",")]
+            try:
+                if not addresses or any(not address for address in addresses):
+                    continue
+                for address in addresses:
+                    ipaddress.ip_address(address)
+            except ValueError:
+                # A DNS name belongs in host=, not hostaddr=. Let libpq resolve host.
+                continue
+        filtered.append((key, value))
+
+    if filtered == query_items:
+        return database_url
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(filtered), parts.fragment)
+    )
 
 class SupabaseDatabase:
     """Direct PostgreSQL writer. Uses the DB URI, not a Supabase API key."""
