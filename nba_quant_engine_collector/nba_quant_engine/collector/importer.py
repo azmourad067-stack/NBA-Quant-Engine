@@ -53,7 +53,10 @@ class NBACollector:
             )
             return data, actual_credits
         except Exception as exc:
-            self.db.fail_ingestion(run_id, str(exc), {"request_params": params})
+            self.db.fail_ingestion(
+                run_id, str(exc),
+                {"request_params": params, "collection_id": self.collection_id},
+            )
             raise
 
     def sync_teams(self, season: int) -> int:
