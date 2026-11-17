@@ -24,6 +24,8 @@ EXPECTED_COLUMNS = {
     "nba_odds_snapshots": {"game_provider_id", "sportsbook", "market_type", "selection", "line_value", "decimal_odds", "is_opening", "is_closing", "source_provider", "source_captured_at", "raw_odds", "american_odds", "price_phase", "snapshot_time_quality"},
     "nba_ingestion_runs": {"ingestion_run_id", "source_provider", "endpoint_name", "request_params", "run_status", "started_at", "completed_at", "records_received", "records_inserted", "records_updated", "credits_estimated", "error_message", "metadata"},
     "nba_raw_payloads": {"raw_payload_id", "ingestion_run_id", "source_provider", "endpoint_name", "request_params", "response_payload", "source_as_of_at", "fetched_at", "payload_sha256"},
+    "nba_feature_snapshots": {"feature_snapshot_id", "game_provider_id", "team_provider_id", "feature_set_version", "feature_cutoff_at", "computed_at", "source_max_available_at", "features"},
+    "nba_predictions": {"prediction_id", "game_provider_id", "feature_snapshot_id", "model_name", "model_version", "market_type", "selection", "predicted_probability", "predicted_at", "feature_cutoff_at", "data_quality_status", "prediction_payload"},
 }
 
 CONFLICT_KEYS = {
