@@ -33,6 +33,9 @@ L'ouverture de l'application ne déclenche aucune collecte. Les imports utilisen
 SUPABASE_DB_URL doit être l'URI de connexion PostgreSQL obtenue dans Supabase → **Connect** → **Session Pooler**. Ce n'est pas la clé API service_role. APP_ACCESS_PASSWORD est obligatoire : l'application reste bloquée s'il n'est pas défini. Choisissez un mot de passe long et unique. Ne mettez jamais les secrets dans un fichier suivi par Git ou dans le code source.
 
 Le fichier requirements.txt est situé dans le même dossier que streamlit_app.py, afin que Streamlit Cloud installe les dépendances de l'application.
+
+Pour les URI Supabase utilisant le pooler transactionnel, l'application retire le paramètre Prisma `pgbouncer=true`. Elle écarte également `hostaddr` lorsqu'il contient un nom DNS (ce paramètre doit contenir une IP littérale) et laisse PostgreSQL résoudre le nom porté par `host`. Les autres options, notamment `sslmode=require`, sont conservées. Psycopg utilise `prepare_threshold=None` pour éviter les requêtes préparées sur le pooler.
+
 Pour les connexions via le pooler transactionnel Supabase, l'application supprime le paramètre `pgbouncer=true` (spécifique à Prisma) et configure Psycopg avec `prepare_threshold=None`. Conservez les autres paramètres PostgreSQL de l'URI, notamment `sslmode=require`.
 
 
