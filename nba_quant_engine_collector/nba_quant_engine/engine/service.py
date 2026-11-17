@@ -21,7 +21,7 @@ def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
         SELECT game_provider_id, game_date, scheduled_tipoff_at, game_status,
                home_team_provider_id, away_team_provider_id, home_score, away_score
         FROM {}.nba_games
-        WHERE game_status = 'final' AND home_score IS NOT NULL AND away_score IS NOT NULL
+        WHERE game_status IN ('final', 'scheduled')
         ORDER BY game_date, scheduled_tipoff_at
     """).format(schema)).fetchall()
     stats = db.conn.execute(sql.SQL("""
@@ -46,7 +46,7 @@ def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
           AND o.decimal_odds > 1
     """).format(schema, schema)).fetchall()
     market = aggregate_verified_market_probabilities([dict(r) for r in odds], tipoffs)
-    return build_feature_rows([dict(r) for r in games], [dict(r) for r in stats], market)
+    return build_feature_rows([dict(r) for r in games], [dict(r) for r in stats], market, include_upcoming=True)
 
 
 def evaluate_dataset(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAIN_GAMES) -> dict[str, Any]:
@@ -100,9 +100,46 @@ def evaluate_dataset(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAI
     }
 
 
+
+def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAIN_GAMES) -> dict[str, Any]:
+    completed = [r for r in rows if r.get("target_home_win") in (0, 1)]
+    upcoming = [r for r in rows if r.get("target_home_win") is None]
+    if len(completed) < min_train_games:
+        return {"status": "insufficient_history", "games": len(completed), "predictions": []}
+    if len({r["target_home_win"] for r in completed}) < 2:
+        return {"status": "insufficient_classes", "games": len(completed), "predictions": []}
+    if not upcoming:
+        return {"status": "no_upcoming_games", "games": 0, "predictions": []}
+
+    x_train = np.asarray([[r.get(c) for c in FEATURE_COLUMNS] for r in completed], dtype=float)
+    y_train = np.asarray([r["target_home_win"] for r in completed], dtype=int)
+    x_future = np.asarray([[r.get(c) for c in FEATURE_COLUMNS] for r in upcoming], dtype=float)
+    model = Pipeline([
+        ("imputer", SimpleImputer(strategy="median", add_indicator=True, keep_empty_features=True)),
+        ("scale", StandardScaler()),
+        ("logit", LogisticRegression(max_iter=2000, random_state=42)),
+    ])
+    model.fit(x_train, y_train)
+    probabilities = model.predict_proba(x_future)[:, 1]
+    predictions = []
+    for row, probability in zip(upcoming, probabilities):
+        predictions.append({
+            "game_provider_id": row["game_provider_id"],
+            "played_at": row["played_at"],
+            "home_team_provider_id": row["home_team_provider_id"],
+            "away_team_provider_id": row["away_team_provider_id"],
+            "home_win_probability": float(probability),
+            "away_win_probability": float(1.0 - probability),
+            "market_home_prob": row.get("market_home_prob"),
+            "elo_home_prob": row["home_elo_prob"],
+        })
+    return {"status": "predicted", "games": len(predictions), "predictions": predictions}
+
+
 def build_engine_report(db: Any, min_train_games: int = MIN_TRAIN_GAMES) -> dict[str, Any]:
     rows = load_engine_dataset(db)
     report = evaluate_dataset(rows, min_train_games=min_train_games)
+    report["upcoming"] = predict_upcoming_games(rows, min_train_games=min_train_games)
     report["dataset"] = {
         "games": len(rows),
         "market_feature_coverage": sum(r.get("market_home_prob") is not None for r in rows),
