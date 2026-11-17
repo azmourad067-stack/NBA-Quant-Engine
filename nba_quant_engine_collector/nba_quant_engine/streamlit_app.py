@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Any
+
+APP_DIR = Path(__file__).resolve().parent
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
 
 import pandas as pd
 import streamlit as st
@@ -364,7 +370,7 @@ def render_collector(settings: Settings) -> None:
         with d3:
             max_credits = st.number_input(
                 "Plafond de crédits", min_value=10, max_value=350,
-                value=min(settings.max_credits_per_run, 120), step=10,
+                value=max(10, min(settings.max_credits_per_run, 120)), step=10,
                 help="Le collecteur s'arrête avant tout appel estimé à dépasser ce plafond.",
             )
 
