@@ -154,6 +154,28 @@ class SupabaseDatabase:
         if problems:
             raise RuntimeError("Database schema validation failed:\n- " + "\n- ".join(problems))
 
+    def games_missing_details(self, game_ids: list[str]) -> set[str]:
+        """Return completed game IDs missing either team or player box-score rows."""
+        if not game_ids:
+            return set()
+        rows = self.conn.execute(
+            sql.SQL("""select candidate.game_provider_id
+                from unnest(%s::text[]) as candidate(game_provider_id)
+                where not exists (
+                    select 1 from {}.nba_team_game_stats s
+                    where s.game_provider_id = candidate.game_provider_id
+                )
+                or not exists (
+                    select 1 from {}.nba_player_game_stats s
+                    where s.game_provider_id = candidate.game_provider_id
+                )""").format(
+                sql.Identifier(self.schema),
+                sql.Identifier(self.schema),
+            ),
+            (game_ids,),
+        ).fetchall()
+        return {str(row["game_provider_id"]) for row in rows}
+
     def upsert_many(self, table: str, records: list[dict[str, Any]]) -> tuple[int, int]:
         if not records:
             return 0, 0
