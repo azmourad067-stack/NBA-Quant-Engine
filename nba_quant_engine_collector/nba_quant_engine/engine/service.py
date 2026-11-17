@@ -148,6 +148,7 @@ def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MI
             "model_name": MODEL_NAME,
             "model_version": MODEL_VERSION,
             "training_games": len(completed),
+            "training_pit_verified": all(bool(r.get("source_timestamp_verified")) for r in completed),
         })
     if db is not None:
         persist_upcoming_predictions(db, predictions)
@@ -174,7 +175,11 @@ def persist_upcoming_predictions(db: Any, predictions: list[dict[str, Any]]) -> 
                 (item["game_provider_id"], MODEL_VERSION, item["feature_cutoff_at"],
                  item["predicted_at"], item["source_max_available_at"], Jsonb(snapshot_features)),
             ).fetchone()
-            quality = "verified" if item["source_timestamp_verified"] and item["source_max_available_at"] is not None else "partial"
+            source_max = item["source_max_available_at"]
+            cutoff = datetime.fromisoformat(item["feature_cutoff_at"].replace("Z", "+00:00"))
+            source_max_dt = source_max if isinstance(source_max, datetime) else (datetime.fromisoformat(str(source_max).replace("Z", "+00:00")) if source_max else None)
+            source_timely = source_max_dt is not None and source_max_dt <= cutoff
+            quality = "verified" if item["source_timestamp_verified"] and item["training_pit_verified"] and source_timely else "partial"
             for selection, probability in (
                 ("home", item["home_win_probability"]),
                 ("away", item["away_win_probability"]),
@@ -191,7 +196,8 @@ def persist_upcoming_predictions(db: Any, predictions: list[dict[str, Any]]) -> 
                      Jsonb({"elo_home_prob": item["elo_home_prob"],
                             "market_home_prob": item["market_home_prob"],
                             "source_game_ids": item["feature_source_game_ids"],
-                            "training_games": item["training_games"]})),
+                            "training_games": item["training_games"],
+                            "training_pit_verified": item["training_pit_verified"]})),
                 )
             saved += 1
     return saved
