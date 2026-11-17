@@ -33,7 +33,7 @@ def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
     stats = db.conn.execute(sql.SQL("""
         SELECT game_provider_id, team_provider_id, field_goals_made,
                field_goals_attempted, three_pointers_made, offensive_rebounds,
-               defensive_rebounds, assists, turnovers
+               defensive_rebounds, assists, turnovers, source_available_at, ingested_at
         FROM {}.nba_team_game_stats
     """).format(schema)).fetchall()
     tipoffs = {
