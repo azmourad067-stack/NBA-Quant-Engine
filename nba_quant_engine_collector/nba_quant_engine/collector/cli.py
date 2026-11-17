@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-credits", type=int, default=None, help="Override MAX_CREDITS_PER_RUN for this run.")
     parser.add_argument("--skip-stats", action="store_true", help="Import teams and games but skip get_game box-score calls.")
     parser.add_argument("--skip-odds", action="store_true", help="Skip get_odds calls.")
+    parser.add_argument(
+        "--boxscores-only",
+        action="store_true",
+        help="Skip list_teams/list_games and use the credit budget only for missing final-game box scores.",
+    )
     parser.add_argument("--env-file", default=".env", help="Environment file path (default: .env).")
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -62,9 +67,10 @@ def main(argv: list[str] | None = None) -> int:
             seasons=range(args.season_start, args.season_end + 1),
             season_type=args.season_type,
             max_games=args.max_games,
-            include_stats=not args.skip_stats,
-            include_odds=not args.skip_odds,
+            include_stats=True if args.boxscores_only else not args.skip_stats,
+            include_odds=False if args.boxscores_only else not args.skip_odds,
             status_filter=None if args.status == "all" else args.status,
+            backfill_details_only=args.boxscores_only,
         )
         logging.info("Import completed:\n%s", json.dumps(report, indent=2, default=str))
         return 0
