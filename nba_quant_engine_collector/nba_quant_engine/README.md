@@ -51,9 +51,11 @@ Depuis le dossier nba_quant_engine_collector/nba_quant_engine :
 
 Renseigner DUNKAPI_API_KEY et SUPABASE_DB_URL dans .env avant de lancer l'application. Sous macOS/Linux, activer l'environnement avec source .venv/bin/activate et copier le modèle avec cp .env.example .env.
 
-La CLI reste disponible :
+La CLI reste disponible. Pour lancer ou reprendre le backfill des saisons régulières 2023–2024 à 2025–2026 avec le plafond de 120 crédits :
 
-    python -m collector.cli --season-start 2027 --season-end 2027 --status final --max-games 10 --max-credits 120
+    python -m collector.cli --season-start 2024 --season-end 2026 --season-type regular --status final --max-games 5000 --max-credits 120 --skip-odds
+
+Relancer exactement la même commande jusqu'à ce que le rapport indique que toutes les saisons sont parcourues et qu'il ne reste plus de matchs terminés à enrichir. Le collecteur reprend les offsets de pagination dans `nba_ingestion_runs`, et interroge le backlog en base pour détailler les matchs les plus anciens incomplets. Les box-scores complets ne sont pas redemandés. Le plafond est appliqué à chaque lancement, pas à l'ensemble des lancements.
 
 ## Import et intégrité des données
 
@@ -104,6 +106,19 @@ La préconfiguration du collecteur passe en phase B :
 L'enrichissement est incrémental : avant chaque collecte de box-scores, le collecteur vérifie les matchs qui n'ont pas encore de lignes dans les deux tables `nba_team_game_stats` et `nba_player_game_stats`. Les matchs déjà complets sont ignorés. Un match partiellement enrichi est repris. Les upserts restent idempotents.
 
 Lors de la collecte du 17 novembre 2026, DunkAPI a renvoyé les calendriers des 21–24 novembre mais des tableaux `books` vides pour chaque rencontre, avec la note fournisseur `No sportsbook lines for this day`. Ce n'est pas une erreur de parsing : aucune cote n'est disponible dans la réponse. Les cotes restent donc désactivées dans la phase B ; elles pourront être réactivées lors d'une collecte ultérieure si le fournisseur publie des lignes.
+
+## Phase C — backfill historique paginé et reprenable
+
+La préconfiguration du collecteur cible maintenant les saisons régulières 2023–2024 à 2025–2026, statut `final`, jusqu'à 5 000 matchs parcourus par lancement et un plafond de 120 crédits.
+
+- La pagination `list_games` reprend au dernier `next_offset` réussi, stocké dans les métadonnées de `nba_ingestion_runs` pour chaque saison, type de saison et filtre de statut.
+- Les offsets ne sont avancés qu'après une page réussie. Une relance ne recommence donc pas inutilement à la première page.
+- Le collecteur réserve 25 crédits avant de poursuivre la pagination quand les box-scores sont activés.
+- Les matchs terminés nécessitant encore des statistiques sont recherchés dans toute la plage de saisons en base, et enrichis par ordre chronologique avec les crédits restants.
+- L'enrichissement est considéré complet lorsqu'il existe au moins deux lignes de statistiques équipes et au moins une ligne de statistiques joueurs.
+- Les cotes sont désactivées dans cette étape : elles feront l'objet d'une collecte distincte, avec leur propre suivi de progression et leur coût. Les lignes horodatées après le tip-off ou sans heure source fiable ne sont jamais qualifiées de PIT.
+
+Le fournisseur documente `limit`, `offset` et `next_offset` pour `list_games`. Le paramètre saison utilise l'année de fin (2024 = 2023–2024). La reprise s'appuie sur ces curseurs et sur les upserts idempotents.
 
 ## Moteur prédictif pré-match v0.1
 
