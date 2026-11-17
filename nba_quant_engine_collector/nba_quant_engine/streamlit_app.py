@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
 
-APP_BUILD_LABEL = "nba-boxscore-only-backfill-v0.5-2026-11-17"
+APP_BUILD_LABEL = "nba-pit-feature-persistence-v0.6-2026-11-17"
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -614,8 +614,8 @@ def render_engine(settings: Settings) -> None:
     """Read-only model diagnostics; no DunkAPI calls or database writes."""
     from collector.db import SupabaseDatabase
 
-    st.subheader("Moteur prédictif pré-match · v0.1")
-    st.caption("Calcul en lecture seule depuis Supabase. Aucun appel DunkAPI ni écriture. Le moteur refuse l'entraînement si l'historique est trop court.")
+    st.subheader("Moteur prédictif pré-match · v0.2 PIT")
+    st.caption("Calcul depuis Supabase. Aucun appel DunkAPI. Chaque prédiction future enregistre son vecteur de 23 features, le cutoff PIT, les sources historiques, la version du modèle et les probabilités domicile/extérieur.")
     min_train_games = st.number_input("Minimum de matchs avant entraînement", min_value=50, max_value=1000, value=100, step=50)
     if st.button("Construire le dataset et évaluer le moteur", type="primary"):
         db = None
@@ -651,7 +651,7 @@ def render_engine(settings: Settings) -> None:
                 st.caption("Aucun match au statut scheduled à prédire.")
             else:
                 st.caption("Prédictions futures non disponibles pour le moment.")
-            st.caption("Anti-fuite : seules les cotes verified_point_in_time capturées strictement avant scheduled_tipoff_at sont admises. Une évaluation hors-échantillon n'est pas une preuve de rentabilité.")
+            st.caption("Traçabilité : le snapshot conserve les 23 variables et les matchs sources. La qualité est marquée partial lorsque les timestamps source manquent ; ingested_at ne prouve pas la disponibilité initiale chez le fournisseur. Aucun appel DunkAPI n’est effectué. Une évaluation hors-échantillon n’est pas une preuve de rentabilité.")
         except Exception as exc:
             st.error(f"Construction du moteur impossible : {exc}")
         finally:
