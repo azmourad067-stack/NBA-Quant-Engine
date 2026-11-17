@@ -71,3 +71,28 @@ def test_keeps_valid_ipv6_hostaddr():
     )
 
     assert psycopg_compatible_dsn(dsn) == dsn
+
+
+def test_supabase_connection_explicitly_clears_hostaddr(monkeypatch):
+    import collector.db as db_module
+
+    captured = {}
+
+    class FakeConnection:
+        pass
+
+    def fake_connect(conninfo, **kwargs):
+        captured["conninfo"] = conninfo
+        captured["kwargs"] = kwargs
+        return FakeConnection()
+
+    monkeypatch.setattr(db_module.psycopg, "connect", fake_connect)
+
+    db_module.SupabaseDatabase(
+        "postgresql://user:password@pooler.example.com:6543/postgres"
+        "?hostaddr=pooler.example.com&sslmode=require"
+    )
+
+    assert "hostaddr=pooler.example.com" not in captured["conninfo"]
+    assert captured["kwargs"]["hostaddr"] == ""
+    assert captured["kwargs"]["prepare_threshold"] is None
