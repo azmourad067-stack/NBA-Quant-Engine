@@ -238,7 +238,8 @@ class SupabaseDatabase:
         self.conn.execute(
             sql.SQL("""update {}.nba_ingestion_runs
                 set run_status = 'failed', completed_at = now(),
-                    error_message = %s, metadata = %s
+                    error_message = %s,
+                    metadata = coalesce(metadata, '{}'::jsonb) || %s
                 where ingestion_run_id = %s""").format(sql.Identifier(self.schema)),
             (error[:4000], Jsonb(metadata or {}), run_id),
         )
