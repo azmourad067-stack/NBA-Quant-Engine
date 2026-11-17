@@ -22,7 +22,7 @@ def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
                home_team_provider_id, away_team_provider_id, home_score, away_score
         FROM {}.nba_games
         WHERE game_status = 'final' AND home_score IS NOT NULL AND away_score IS NOT NULL
-        ORDER BY COALESCE(scheduled_tipoff_at, game_date::timestamp)
+        ORDER BY game_date, scheduled_tipoff_at
     """).format(schema)).fetchall()
     stats = db.conn.execute(sql.SQL("""
         SELECT game_provider_id, team_provider_id, field_goals_made,
