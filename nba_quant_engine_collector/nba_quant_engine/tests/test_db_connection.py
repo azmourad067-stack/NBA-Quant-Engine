@@ -60,3 +60,37 @@ def test_database_constructor_explicitly_overrides_hostaddr(monkeypatch):
     assert captured["hostaddr"] == ""
     assert captured["prepare_threshold"] is None
     assert captured["sslmode"] == "require"
+
+
+def test_ingestion_finish_and_fail_sql_templates_accept_jsonb_default():
+    class FakeConnection:
+        def __init__(self):
+            self.executed = []
+            self.commits = 0
+
+        def execute(self, query, params):
+            self.executed.append((query, params))
+
+        def commit(self):
+            self.commits += 1
+
+    db = SupabaseDatabase.__new__(SupabaseDatabase)
+    db.schema = "nba"
+    db.conn = FakeConnection()
+
+    db.finish_ingestion(
+        run_id=123,
+        records_received=1,
+        records_inserted=1,
+        records_updated=0,
+        credits=2,
+        metadata={"collection_id": "test-collection"},
+    )
+    db.fail_ingestion(
+        run_id=124,
+        error="test error",
+        metadata={"collection_id": "test-collection"},
+    )
+
+    assert len(db.conn.executed) == 2
+    assert db.conn.commits == 2
