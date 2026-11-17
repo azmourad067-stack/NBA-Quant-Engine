@@ -4,6 +4,8 @@ import hmac
 import os
 import re
 import sys
+import time
+from uuid import uuid4
 from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
@@ -129,7 +131,7 @@ def fetch_dashboard_data(settings: Settings) -> dict[str, Any]:
                 """
                 SELECT ingestion_run_id, endpoint_name, run_status, started_at,
                        completed_at, records_received, records_inserted,
-                       records_updated, credits_estimated, error_message
+                       records_updated, credits_estimated, error_message, metadata
                 FROM {}.nba_ingestion_runs
                 ORDER BY started_at DESC
                 LIMIT 12
@@ -191,6 +193,7 @@ def run_collection(
     max_credits: int,
     include_stats: bool,
     include_odds: bool,
+    collection_id: str,
 ) -> dict[str, Any]:
     budget = CreditBudget(max_credits)
     api = DunkAPIClient(
@@ -201,10 +204,17 @@ def run_collection(
         budget=budget,
     )
     db = None
+    lock_acquired = False
     try:
         db = SupabaseDatabase(settings.supabase_db_url, schema=settings.database_schema)
         db.verify_schema()
-        collector = NBACollector(api, db, budget)
+        lock_acquired = db.try_acquire_collection_lock()
+        if not lock_acquired:
+            raise RuntimeError(
+                "Une collecte NBA est déjà en cours. Aucune requête DunkAPI n'a été envoyée. "
+                "Réessayez après sa fin."
+            )
+        collector = NBACollector(api, db, budget, collection_id=collection_id)
         return collector.collect(
             seasons=range(season_start, season_end + 1),
             season_type=season_type,
@@ -216,7 +226,11 @@ def run_collection(
     finally:
         api.close()
         if db is not None:
-            db.close()
+            try:
+                if lock_acquired:
+                    db.release_collection_lock()
+            finally:
+                db.close()
 
 
 
@@ -406,6 +420,7 @@ def render_overview(settings: Settings) -> None:
                 "records_updated": "Mis à jour",
                 "credits_estimated": "Crédits",
                 "error_message": "Erreur",
+                "metadata": "Métadonnées / ID collecte",
             }
         )
         st.dataframe(runs_df, use_container_width=True, hide_index=True)
@@ -488,8 +503,34 @@ def render_collector(settings: Settings) -> None:
         if season_end < season_start:
             st.error("La dernière saison doit être supérieure ou égale à la première.")
             return
+        # Streamlit reruns the script after every form submission. Keep a short
+        # same-session idempotency window so a repeated click cannot replay the
+        # exact same expensive request immediately after the first run completes.
+        submission_signature = (
+            int(season_start), int(season_end), season_type, status, int(max_games),
+            int(max_credits), bool(include_stats), bool(include_odds),
+        )
+        now = time.monotonic()
+        previous = st.session_state.get("nba_last_collection_submission")
+        if (
+            previous
+            and previous.get("signature") == submission_signature
+            and now - previous.get("at", 0.0) < 60
+        ):
+            st.warning(
+                "Cette demande identique vient déjà d'être soumise. "
+                "Attendez 60 secondes avant de la relancer. Aucun appel DunkAPI supplémentaire n'a été effectué."
+            )
+            return
+
+        collection_id = str(uuid4())
+        st.session_state["nba_last_collection_submission"] = {
+            "signature": submission_signature,
+            "at": now,
+            "collection_id": collection_id,
+        }
         try:
-            with st.spinner("Collecte en cours. Ne fermez pas cette page…"):
+            with st.spinner(f"Collecte {collection_id} en cours. Ne fermez pas cette page…"):
                 report = run_collection(
                     settings=settings,
                     season_start=int(season_start),
@@ -500,8 +541,10 @@ def render_collector(settings: Settings) -> None:
                     max_credits=int(max_credits),
                     include_stats=include_stats,
                     include_odds=include_odds,
+                    collection_id=collection_id,
                 )
             st.success("Collecte terminée.")
+            st.caption(f"Identifiant unique de collecte : {collection_id}")
             result_cols = st.columns(4)
             result_cols[0].metric("Matchs sélectionnés", report["games_selected"])
             result_cols[1].metric("Équipes traitées", report["teams"])
