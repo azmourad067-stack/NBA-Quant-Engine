@@ -281,37 +281,55 @@ class NBACollector:
         include_stats: bool = True,
         include_odds: bool = True,
         status_filter: str | None = "final",
+        backfill_details_only: bool = False,
     ) -> dict[str, Any]:
         season_list = list(seasons)
         if not season_list:
             raise ValueError("At least one season is required.")
-        self.sync_teams(season_list[-1])
-        games = self.sync_games(
-            season_list,
-            season_type,
-            max_games,
-            status_filter=status_filter,
-            reserve_credits=25 if include_stats else 0,
-        )
+        if backfill_details_only and not include_stats:
+            raise ValueError("Box-score-only mode requires include_stats=True.")
+        if backfill_details_only and include_odds:
+            raise ValueError("Box-score-only mode cannot request odds.")
 
-        completed_games = [game for game in games if game["game_status"] == "final"]
-        current_page_missing_ids = self.db.games_missing_details(
-            [str(game["game_provider_id"]) for game in completed_games]
-        )
-        games_skipped_existing_details = max(
-            0, len(completed_games) - len(current_page_missing_ids)
-        )
+        # Dedicated backfill mode deliberately makes no list_teams or
+        # list_games calls. Every available credit can go to get_game.
+        if backfill_details_only:
+            games: list[dict[str, Any]] = []
+            games_skipped_existing_details = 0
+        else:
+            self.sync_teams(season_list[-1])
+            games = self.sync_games(
+                season_list,
+                season_type,
+                max_games,
+                status_filter=status_filter,
+                reserve_credits=25 if include_stats else 0,
+            )
+            completed_games = [
+                game for game in games if game["game_status"] == "final"
+            ]
+            current_page_missing_ids = self.db.games_missing_details(
+                [str(game["game_provider_id"]) for game in completed_games]
+            )
+            games_skipped_existing_details = max(
+                0, len(completed_games) - len(current_page_missing_ids)
+            )
 
-        # Select from the full database backlog, not only the most recently
-        # listed page. This lets later budget-limited runs keep enriching games
-        # imported during earlier runs.
+        # Select from the full database backlog, not only the latest calendar page.
+        # The query returns the oldest incomplete finals first and upserts remain
+        # idempotent, so subsequent runs resume safely from the remaining backlog.
         missing_final_games = self.db.final_games_missing_details(
-            season_list, season_type=season_type
+            season_list,
+            season_type=season_type,
+            limit=max(1, min(10000, int(max_games))),
         )
         games_to_enrich: list[dict[str, Any]] = []
         games_deferred_due_to_budget = 0
         if include_stats:
-            details_capacity = max(0, self.budget.remaining // 5)
+            details_capacity = min(
+                max(0, int(max_games)),
+                max(0, self.budget.remaining // 5),
+            )
             games_to_enrich = missing_final_games[:details_capacity]
             games_deferred_due_to_budget = max(
                 0, len(missing_final_games) - len(games_to_enrich)
@@ -322,6 +340,13 @@ class NBACollector:
         if include_odds:
             self.sync_odds(games)
 
+        # Recount after enrichment so partial provider payloads remain in the
+        # backlog rather than being treated as successfully completed.
+        remaining_final_games = self.db.final_games_missing_details(
+            season_list,
+            season_type=season_type,
+            limit=max(1, min(10000, int(max_games))),
+        )
         final_pagination_state = self.db.get_game_pagination_state(
             season_list, season_type, status_filter
         )
@@ -329,19 +354,18 @@ class NBACollector:
             season for season in season_list
             if not final_pagination_state.get(season, {}).get("complete", False)
         ]
-        final_games_pending_details = max(
-            0, len(missing_final_games) - len(games_to_enrich)
-        )
         return {
             "collection_id": self.collection_id,
             "season_end_years": season_list,
             "season_type": season_type,
             "status_filter": status_filter or "all",
+            "backfill_details_only": backfill_details_only,
             "games_selected": len(games),
+            "games_backlog_before": len(missing_final_games),
             "completed_games_for_stats": len(games_to_enrich),
             "games_skipped_existing_details": games_skipped_existing_details,
             "games_deferred_due_to_budget": games_deferred_due_to_budget,
-            "final_games_pending_details": final_games_pending_details,
+            "final_games_pending_details": len(remaining_final_games),
             "seasons_pending_pagination": seasons_pending_pagination,
             "pagination_complete": not seasons_pending_pagination,
             "credits_used_local_estimate": self.budget.used,
