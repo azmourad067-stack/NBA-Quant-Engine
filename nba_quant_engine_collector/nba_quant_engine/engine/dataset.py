@@ -73,6 +73,7 @@ def build_feature_rows(
     history_window: int = 5,
     elo_k: float = 20.0,
     home_advantage: float = 65.0,
+    include_upcoming: bool = False,
 ) -> list[dict[str, Any]]:
     """Build chronological pre-game rows; current-game stats are added only afterwards."""
     if history_window < 1:
@@ -83,9 +84,10 @@ def build_feature_rows(
 
     ordered = []
     for game in games:
-        if str(game.get("game_status", "")).lower() != "final":
-            continue
-        if game.get("home_score") is None or game.get("away_score") is None:
+        status = str(game.get("game_status", "")).lower()
+        is_final = status == "final" and game.get("home_score") is not None and game.get("away_score") is not None
+        is_upcoming = include_upcoming and status == "scheduled"
+        if not (is_final or is_upcoming):
             continue
         played_at = _as_datetime(game.get("scheduled_tipoff_at") or game.get("game_date"))
         if played_at is not None:
@@ -106,8 +108,9 @@ def build_feature_rows(
         rows.append({
             "game_provider_id": game_id, "played_at": played_at.isoformat(),
             "home_team_provider_id": home_id, "away_team_provider_id": away_id,
-            "home_score": int(game["home_score"]), "away_score": int(game["away_score"]),
-            "target_home_win": int(game["home_score"] > game["away_score"]),
+            "home_score": int(game["home_score"]) if game.get("home_score") is not None else None,
+            "away_score": int(game["away_score"]) if game.get("away_score") is not None else None,
+            "target_home_win": int(game["home_score"] > game["away_score"]) if game.get("home_score") is not None and game.get("away_score") is not None else None,
             "home_elo_prob": elo_prob,
             "home_rest_days": h["rest_days"], "away_rest_days": a["rest_days"],
             "rest_days_diff": h["rest_days"] - a["rest_days"] if h["rest_days"] is not None and a["rest_days"] is not None else None,
@@ -122,6 +125,10 @@ def build_feature_rows(
             "home_turnovers_last5": h["turnovers"], "away_turnovers_last5": a["turnovers"],
             "market_home_prob": (market_home_prob or {}).get(game_id),
         })
+
+        # Upcoming games are prediction targets, never history updates.
+        if row["target_home_win"] is None:
+            continue
 
         # Historical labels/stats update state only after this game's feature row is frozen.
         home_stats = stats_by_game.get(game_id, {}).get(home_id, {})
