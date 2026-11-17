@@ -140,7 +140,7 @@ def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MI
             "market_home_prob": row.get("market_home_prob"),
             "elo_home_prob": row["home_elo_prob"],
             "features": {column: row.get(column) for column in FEATURE_COLUMNS},
-            "feature_cutoff_at": predicted_at,
+            "feature_cutoff_at": row.get("feature_cutoff_at") or predicted_at,
             "predicted_at": predicted_at,
             "source_max_available_at": row.get("source_max_available_at"),
             "feature_source_game_ids": row.get("feature_source_game_ids", []),
