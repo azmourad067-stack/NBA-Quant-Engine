@@ -90,6 +90,21 @@ Les tests existants couvrent les mappings DunkAPI → Supabase, les conversions 
 La documentation DunkAPI décrit des matchs et box-scores historiques depuis 2003–04, mais l'historique des cotes commence en 2013–14 avec des périodes et marchés incomplets. Les rapports de blessures ne peuvent être collectés qu'à partir du lancement de leur collecte. Vérifier le catalogue de données du fournisseur avant de planifier un import historique massif : https://dunkapi.com/data.
 
 
+## Phase B — enrichissement des matchs terminés
+
+La préconfiguration du collecteur passe en phase B :
+
+- saison régulière 2026–2027 ;
+- statut `final` ;
+- jusqu'à 25 matchs ;
+- box-scores activés ;
+- cotes désactivées pour ne pas consommer de crédits sur des dates où DunkAPI ne renvoie aucune ligne ;
+- plafond local de 120 crédits.
+
+L'enrichissement est incrémental : avant chaque collecte de box-scores, le collecteur vérifie les matchs qui n'ont pas encore de lignes dans les deux tables `nba_team_game_stats` et `nba_player_game_stats`. Les matchs déjà complets sont ignorés. Un match partiellement enrichi est repris. Les upserts restent idempotents.
+
+Lors de la collecte du 17 novembre 2026, DunkAPI a renvoyé les calendriers des 21–24 novembre mais des tableaux `books` vides pour chaque rencontre, avec la note fournisseur `No sportsbook lines for this day`. Ce n'est pas une erreur de parsing : aucune cote n'est disponible dans la réponse. Les cotes restent donc désactivées dans la phase B ; elles pourront être réactivées lors d'une collecte ultérieure si le fournisseur publie des lignes.
+
 ## Moteur prédictif pré-match v0.1
 
 Une première chaîne de modélisation est disponible dans `engine/` :
