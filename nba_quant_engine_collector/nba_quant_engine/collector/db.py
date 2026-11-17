@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from contextlib import contextmanager
 from typing import Any, Iterator
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from psycopg import sql
@@ -31,6 +32,16 @@ CONFLICT_KEYS = {
 }
 
 
+def psycopg_compatible_dsn(database_url: str) -> str:
+    """Remove Prisma-specific pgbouncer=true; Psycopg uses prepare_threshold instead."""
+    parts = urlsplit(database_url)
+    query_items = parse_qsl(parts.query, keep_blank_values=True)
+    filtered = [(key, value) for key, value in query_items if key.lower() != "pgbouncer"]
+    if len(filtered) == len(query_items):
+        return database_url
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(filtered), parts.fragment))
+
+
 class SupabaseDatabase:
     """Direct PostgreSQL writer. Uses the DB URI, not a Supabase API key."""
 
@@ -38,7 +49,12 @@ class SupabaseDatabase:
         if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", schema):
             raise ValueError("Invalid PostgreSQL schema name.")
         self.schema = schema
-        self.conn = psycopg.connect(database_url, row_factory=dict_row, connect_timeout=20)
+        self.conn = psycopg.connect(
+            psycopg_compatible_dsn(database_url),
+            row_factory=dict_row,
+            connect_timeout=20,
+            prepare_threshold=None,
+        )
 
     def close(self) -> None:
         self.conn.close()
