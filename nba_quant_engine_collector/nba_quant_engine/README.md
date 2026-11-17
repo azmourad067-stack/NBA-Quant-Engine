@@ -79,7 +79,7 @@ Règles de données :
 - Les opening/closing moneyline sont importées lorsqu'elles sont fournies. Les lignes et prix spread/total non disponibles ne sont pas reconstruits artificiellement.
 - Les réponses API sont conservées dans nba_raw_payloads et les appels sont consignés dans nba_ingestion_runs.
 
-Le plafond de crédits de la page de collecte est une limite locale estimative : le fournisseur reste la référence pour la consommation réelle. Commencer par de petits lots (par défaut : 10 matchs et 120 crédits dans l'interface), puis augmenter progressivement après contrôle des premiers imports.
+Le plafond de crédits de la page de collecte est une limite locale estimative : le fournisseur reste la référence pour la consommation réelle. Pour le backfill historique, le plafond est de 120 crédits par lancement et la pagination peut parcourir jusqu'à 5 000 matchs par lancement ; la limite de crédits, et non ce plafond de sécurité, arrête généralement le lot.
 
 ## Tests
 
