@@ -82,6 +82,11 @@ class NBACollector:
         for season in seasons:
             offset = 0
             while len(imported) < max_games:
+                # Keep enough headroom for the next list_games request. If the
+                # credit ceiling is reached, return the games already discovered;
+                # do not turn a safe partial collection into a failed run.
+                if self.budget.remaining < 2:
+                    return imported[:max_games]
                 limit = min(page_size, max_games - len(imported))
                 params = {
                     "season": season,
@@ -247,7 +252,17 @@ class NBACollector:
                 if str(game["game_provider_id"]) in missing_ids
             ]
             if games_to_enrich:
-                self.sync_game_details(games_to_enrich)
+                # get_game costs 5 credits per game. Pre-cap detail calls so a
+                # historical batch can finish cleanly within the remaining budget.
+                details_capacity = max(0, self.budget.remaining // 5)
+                games_deferred_due_to_budget = max(0, len(games_to_enrich) - details_capacity)
+                games_to_enrich = games_to_enrich[:details_capacity]
+                if games_to_enrich:
+                    self.sync_game_details(games_to_enrich)
+            else:
+                games_deferred_due_to_budget = 0
+        else:
+            games_deferred_due_to_budget = 0
         if include_odds:
             self.sync_odds(games)
         return {
@@ -257,7 +272,8 @@ class NBACollector:
             "status_filter": status_filter or "all",
             "games_selected": len(games),
             "completed_games_for_stats": len(games_to_enrich),
-            "games_skipped_existing_details": len(completed_games) - len(games_to_enrich),
+            "games_skipped_existing_details": len(completed_games) - len(games_to_enrich) - games_deferred_due_to_budget,
+            "games_deferred_due_to_budget": games_deferred_due_to_budget,
             "credits_used_local_estimate": self.budget.used,
             "credits_remaining_in_run_budget": self.budget.remaining,
             **self.totals,
