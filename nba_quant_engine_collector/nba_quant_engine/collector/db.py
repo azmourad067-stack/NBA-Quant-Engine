@@ -76,6 +76,9 @@ class SupabaseDatabase:
         self.schema = schema
         self.conn = psycopg.connect(
             psycopg_compatible_dsn(database_url),
+            # Explicitly override a stray PGHOSTADDR environment variable or
+            # a hostaddr accidentally left in the URI. Empty means: resolve host=.
+            hostaddr="",
             row_factory=dict_row,
             connect_timeout=20,
             prepare_threshold=None,
