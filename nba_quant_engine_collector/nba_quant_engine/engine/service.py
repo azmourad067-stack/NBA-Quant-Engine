@@ -51,8 +51,20 @@ def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
           AND o.source_captured_at < g.scheduled_tipoff_at
           AND o.decimal_odds > 1
     """).format(schema, schema)).fetchall()
-    market = aggregate_verified_market_probabilities([dict(r) for r in odds], tipoffs)
-    return build_feature_rows([dict(r) for r in games], [dict(r) for r in stats], market, include_upcoming=True)
+    odds_dicts = [dict(r) for r in odds]
+    market = aggregate_verified_market_probabilities(odds_dicts, tipoffs)
+    market_source_times: dict[str, datetime] = {}
+    for odds_row in odds_dicts:
+        game_id = str(odds_row.get("game_provider_id"))
+        captured = odds_row.get("source_captured_at")
+        if game_id in market and captured is not None:
+            previous = market_source_times.get(game_id)
+            if previous is None or captured > previous:
+                market_source_times[game_id] = captured
+    return build_feature_rows(
+        [dict(r) for r in games], [dict(r) for r in stats], market,
+        include_upcoming=True, market_source_captured_at=market_source_times,
+    )
 
 
 def evaluate_dataset(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAIN_GAMES) -> dict[str, Any]:
