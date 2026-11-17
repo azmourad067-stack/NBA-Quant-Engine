@@ -228,7 +228,7 @@ class SupabaseDatabase:
             sql.SQL("""update {}.nba_ingestion_runs
                 set run_status = 'succeeded', completed_at = now(),
                     records_received = %s, records_inserted = %s,
-                    records_updated = %s, credits_estimated = %s, metadata = coalesce(metadata, '{}'::jsonb) || %s
+                    records_updated = %s, credits_estimated = %s, metadata = coalesce(metadata, '{{}}'::jsonb) || %s
                 where ingestion_run_id = %s""").format(sql.Identifier(self.schema)),
             (records_received, records_inserted, records_updated, credits, Jsonb(metadata or {}), run_id),
         )
@@ -239,7 +239,7 @@ class SupabaseDatabase:
             sql.SQL("""update {}.nba_ingestion_runs
                 set run_status = 'failed', completed_at = now(),
                     error_message = %s,
-                    metadata = coalesce(metadata, '{}'::jsonb) || %s
+                    metadata = coalesce(metadata, '{{}}'::jsonb) || %s
                 where ingestion_run_id = %s""").format(sql.Identifier(self.schema)),
             (error[:4000], Jsonb(metadata or {}), run_id),
         )
