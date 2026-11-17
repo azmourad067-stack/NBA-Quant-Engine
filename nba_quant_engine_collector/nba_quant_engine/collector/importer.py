@@ -28,7 +28,7 @@ class NBACollector:
         self.api = api
         self.db = db
         self.budget = budget
-        self.totals = {"teams": 0, "games": 0, "team_stats": 0, "players": 0, "player_stats": 0, "odds": 0}
+        self.totals = {"teams": 0, "games": 0, "games_pages": 0, "team_stats": 0, "players": 0, "player_stats": 0, "odds": 0}
 
     def _api_import(
         self,
@@ -77,16 +77,27 @@ class NBACollector:
         max_games: int,
         status_filter: str | None = "final",
         page_size: int = 100,
+        reserve_credits: int = 0,
     ) -> list[dict[str, Any]]:
+        """Import game pages and resume each season from its last durable offset."""
         imported: list[dict[str, Any]] = []
-        for season in seasons:
-            offset = 0
+        season_list = [int(season) for season in seasons]
+        pagination_state = self.db.get_game_pagination_state(
+            season_list, season_type, status_filter
+        )
+
+        for season in season_list:
+            state = pagination_state.get(season, {})
+            if state.get("complete"):
+                continue
+            offset = int(state.get("next_offset") or 0)
+
             while len(imported) < max_games:
-                # Keep enough headroom for the next list_games request. If the
-                # credit ceiling is reached, return the games already discovered;
-                # do not turn a safe partial collection into a failed run.
-                if self.budget.remaining < 2:
+                # Preserve credits for box-score enrichment. The cursor for each
+                # successful page is persisted in nba_ingestion_runs metadata.
+                if self.budget.remaining - 2 < reserve_credits:
                     return imported[:max_games]
+
                 limit = min(page_size, max_games - len(imported))
                 params = {
                     "season": season,
@@ -99,10 +110,25 @@ class NBACollector:
                     params["status"] = status_filter
 
                 def writer(data: dict[str, Any], run_id: int):
-                    games = data.get("games") or []
+                    page_games = data.get("games") or []
+                    raw_next = data.get("next_offset")
+                    try:
+                        resolved_next = int(raw_next) if raw_next is not None else None
+                    except (TypeError, ValueError):
+                        resolved_next = None
+                    if resolved_next is None and len(page_games) >= limit:
+                        # Defensive fallback for provider responses that omit
+                        # next_offset on a full page.
+                        resolved_next = offset + len(page_games)
+                    pagination_complete = (
+                        not page_games
+                        or resolved_next is None
+                        or resolved_next <= offset
+                    )
+
                     game_rows: list[dict[str, Any]] = []
                     team_rows: dict[str, dict[str, Any]] = {}
-                    for game in games:
+                    for game in page_games:
                         home = game.get("home") or {}
                         away = game.get("away") or {}
                         for team in (home, away):
@@ -110,15 +136,26 @@ class NBACollector:
                             if record:
                                 team_rows[record["team_provider_id"]] = record
                         game_rows.append(game_record(game, fallback_season=season))
-                    team_inserted, team_updated = self.db.upsert_many("nba_teams", list(team_rows.values()))
+                    team_inserted, team_updated = self.db.upsert_many(
+                        "nba_teams", list(team_rows.values())
+                    )
                     game_inserted, game_updated = self.db.upsert_many("nba_games", game_rows)
                     self.totals["games"] += len(game_rows)
                     self.totals["teams"] += len(team_rows)
+                    self.totals["games_pages"] += 1
                     return (
                         team_inserted + game_inserted,
                         team_updated + game_updated,
-                        len(games),
-                        {"season": season, "offset": offset, "games_received": len(games), "next_offset": data.get("next_offset")},
+                        len(page_games),
+                        {
+                            "season": season,
+                            "season_type": season_type,
+                            "status_filter": status_filter or "all",
+                            "offset": offset,
+                            "games_received": len(page_games),
+                            "next_offset": None if pagination_complete else resolved_next,
+                            "pagination_complete": pagination_complete,
+                        },
                     )
 
                 data, _ = self._api_import("list_games", params, writer, 2)
@@ -127,14 +164,23 @@ class NBACollector:
                     try:
                         imported.append(game_record(game, fallback_season=season))
                     except ValueError:
-                        # Malformed entries are recorded in raw payload, but never inserted into core tables.
+                        # Malformed entries remain in the raw payload but are not inserted.
                         continue
-                next_offset = data.get("next_offset")
-                if not page or next_offset is None or int(next_offset) <= offset:
+
+                raw_next = data.get("next_offset")
+                try:
+                    next_offset = int(raw_next) if raw_next is not None else None
+                except (TypeError, ValueError):
+                    next_offset = None
+                if next_offset is None and len(page) >= limit:
+                    next_offset = offset + len(page)
+                if not page or next_offset is None or next_offset <= offset:
                     break
-                offset = int(next_offset)
+                offset = next_offset
+
             if len(imported) >= max_games:
                 break
+
         return imported[:max_games]
 
     def sync_game_details(self, games: list[dict[str, Any]]) -> None:
@@ -240,31 +286,52 @@ class NBACollector:
         if not season_list:
             raise ValueError("At least one season is required.")
         self.sync_teams(season_list[-1])
-        games = self.sync_games(season_list, season_type, max_games, status_filter=status_filter)
+        games = self.sync_games(
+            season_list,
+            season_type,
+            max_games,
+            status_filter=status_filter,
+            reserve_credits=25 if include_stats else 0,
+        )
+
         completed_games = [game for game in games if game["game_status"] == "final"]
+        current_page_missing_ids = self.db.games_missing_details(
+            [str(game["game_provider_id"]) for game in completed_games]
+        )
+        games_skipped_existing_details = max(
+            0, len(completed_games) - len(current_page_missing_ids)
+        )
+
+        # Select from the full database backlog, not only the most recently
+        # listed page. This lets later budget-limited runs keep enriching games
+        # imported during earlier runs.
+        missing_final_games = self.db.final_games_missing_details(
+            season_list, season_type=season_type
+        )
         games_to_enrich: list[dict[str, Any]] = []
-        if include_stats and completed_games:
-            missing_ids = self.db.games_missing_details(
-                [str(game["game_provider_id"]) for game in completed_games]
+        games_deferred_due_to_budget = 0
+        if include_stats:
+            details_capacity = max(0, self.budget.remaining // 5)
+            games_to_enrich = missing_final_games[:details_capacity]
+            games_deferred_due_to_budget = max(
+                0, len(missing_final_games) - len(games_to_enrich)
             )
-            games_to_enrich = [
-                game for game in completed_games
-                if str(game["game_provider_id"]) in missing_ids
-            ]
             if games_to_enrich:
-                # get_game costs 5 credits per game. Pre-cap detail calls so a
-                # historical batch can finish cleanly within the remaining budget.
-                details_capacity = max(0, self.budget.remaining // 5)
-                games_deferred_due_to_budget = max(0, len(games_to_enrich) - details_capacity)
-                games_to_enrich = games_to_enrich[:details_capacity]
-                if games_to_enrich:
-                    self.sync_game_details(games_to_enrich)
-            else:
-                games_deferred_due_to_budget = 0
-        else:
-            games_deferred_due_to_budget = 0
+                self.sync_game_details(games_to_enrich)
+
         if include_odds:
             self.sync_odds(games)
+
+        final_pagination_state = self.db.get_game_pagination_state(
+            season_list, season_type, status_filter
+        )
+        seasons_pending_pagination = [
+            season for season in season_list
+            if not final_pagination_state.get(season, {}).get("complete", False)
+        ]
+        final_games_pending_details = max(
+            0, len(missing_final_games) - len(games_to_enrich)
+        )
         return {
             "collection_id": self.collection_id,
             "season_end_years": season_list,
@@ -272,8 +339,11 @@ class NBACollector:
             "status_filter": status_filter or "all",
             "games_selected": len(games),
             "completed_games_for_stats": len(games_to_enrich),
-            "games_skipped_existing_details": len(completed_games) - len(games_to_enrich) - games_deferred_due_to_budget,
+            "games_skipped_existing_details": games_skipped_existing_details,
             "games_deferred_due_to_budget": games_deferred_due_to_budget,
+            "final_games_pending_details": final_games_pending_details,
+            "seasons_pending_pagination": seasons_pending_pagination,
+            "pagination_complete": not seasons_pending_pagination,
             "credits_used_local_estimate": self.budget.used,
             "credits_remaining_in_run_budget": self.budget.remaining,
             **self.totals,
