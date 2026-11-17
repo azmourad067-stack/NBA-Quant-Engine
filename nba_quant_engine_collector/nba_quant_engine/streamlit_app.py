@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 import re
 import sys
@@ -64,6 +65,7 @@ st.markdown(
 def load_streamlit_secrets() -> None:
     """Expose Streamlit Cloud secrets to the existing environment-based Settings class."""
     secret_names = (
+        "APP_ACCESS_PASSWORD",
         "DUNKAPI_API_KEY",
         "SUPABASE_DB_URL",
         "DUNKAPI_BASE_URL",
@@ -210,6 +212,39 @@ def run_collection(
         api.close()
         if db is not None:
             db.close()
+
+
+
+def authenticate_app() -> None:
+    """Require a private app password before exposing database or collection controls."""
+    expected = os.getenv("APP_ACCESS_PASSWORD", "").strip()
+    if not expected:
+        st.error("Accès bloqué : APP_ACCESS_PASSWORD n'est pas configuré dans les secrets.")
+        st.info(
+            "Définissez un mot de passe long dans Streamlit Cloud → App → Settings → Secrets, "
+            "puis rechargez l'application."
+        )
+        st.stop()
+
+    if st.session_state.get("nba_quant_engine_authenticated", False):
+        with st.sidebar:
+            if st.button("Se déconnecter", use_container_width=True):
+                st.session_state["nba_quant_engine_authenticated"] = False
+                st.rerun()
+        return
+
+    st.subheader("Accès privé")
+    st.caption("Connectez-vous pour consulter les données NBA et lancer une collecte.")
+    with st.form("nba_quant_engine_login"):
+        password = st.text_input("Mot de passe de l'application", type="password")
+        submitted = st.form_submit_button("Se connecter", type="primary")
+    if submitted:
+        if hmac.compare_digest(password, expected):
+            st.session_state["nba_quant_engine_authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Mot de passe incorrect.")
+    st.stop()
 
 
 def render_header() -> None:
@@ -425,6 +460,8 @@ def render_collector(settings: Settings) -> None:
 
 
 def main() -> None:
+    load_streamlit_secrets()
+    authenticate_app()
     render_header()
     with st.sidebar:
         st.markdown("## Navigation")
