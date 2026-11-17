@@ -97,6 +97,8 @@ def build_feature_rows(
     histories: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=history_window))
     elo: dict[str, float] = defaultdict(lambda: 1500.0)
     rows: list[dict[str, Any]] = []
+    last_scheduled_tipoff: dict[str, datetime] = {}
+    computed_at = datetime.now(timezone.utc)
 
     for played_at, game in ordered:
         game_id = str(game["game_provider_id"])
@@ -104,6 +106,10 @@ def build_feature_rows(
         away_id = str(game["away_team_provider_id"])
         h = _team_summary(histories[home_id], played_at)
         a = _team_summary(histories[away_id], played_at)
+        home_anchor = max([x for x in ((histories[home_id][-1]["played_at"] if histories[home_id] else None), last_scheduled_tipoff.get(home_id)) if x is not None], default=None)
+        away_anchor = max([x for x in ((histories[away_id][-1]["played_at"] if histories[away_id] else None), last_scheduled_tipoff.get(away_id)) if x is not None], default=None)
+        h["rest_days"] = max(0.0, (played_at - home_anchor).total_seconds() / 86400.0) if home_anchor else None
+        a["rest_days"] = max(0.0, (played_at - away_anchor).total_seconds() / 86400.0) if away_anchor else None
         elo_prob = 1.0 / (1.0 + 10.0 ** (-(elo[home_id] + home_advantage - elo[away_id]) / 400.0))
         row = {
             "game_provider_id": game_id, "played_at": played_at.isoformat(),
@@ -124,11 +130,17 @@ def build_feature_rows(
             "home_assists_last5": h["assists"], "away_assists_last5": a["assists"],
             "home_turnovers_last5": h["turnovers"], "away_turnovers_last5": a["turnovers"],
             "market_home_prob": (market_home_prob or {}).get(game_id),
+            "feature_cutoff_at": computed_at.isoformat(),
+            "computed_at": computed_at.isoformat(),
+            "feature_source_game_ids": sorted({str(x.get("game_provider_id")) for team_id in (home_id, away_id) for x in histories[team_id]}),
+            "source_max_available_at": max([x["available_at"] for team_id in (home_id, away_id) for x in histories[team_id] if x.get("available_at") is not None], default=None),
         }
         rows.append(row)
 
         # Upcoming games are prediction targets, never history updates.
         if row["target_home_win"] is None:
+            last_scheduled_tipoff[home_id] = played_at
+            last_scheduled_tipoff[away_id] = played_at
             continue
 
         # Historical labels/stats update state only after this game's feature row is frozen.
@@ -142,6 +154,8 @@ def build_feature_rows(
             rebounds = None if off_reb is None and def_reb is None else (off_reb or 0) + (def_reb or 0)
             histories[team_id].append({
                 "played_at": played_at, "win": win,
+                "game_provider_id": game_id,
+                "available_at": max([x for x in (_as_datetime(own.get("source_available_at")), _as_datetime(own.get("ingested_at"))) if x is not None], default=None),
                 "points_for": game["home_score"] if team_id == home_id else game["away_score"],
                 "points_against": game["away_score"] if team_id == home_id else game["home_score"],
                 "fgm": own.get("field_goals_made"), "fga": own.get("field_goals_attempted"),
