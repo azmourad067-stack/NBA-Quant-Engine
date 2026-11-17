@@ -21,6 +21,7 @@ L'ouverture de l'application ne déclenche aucune collecte. Les imports utilisen
 5. Dans les options avancées, sélectionner Python 3.12.
 6. Dans **App → Settings → Secrets**, ajouter les variables suivantes :
 
+    APP_ACCESS_PASSWORD = "un-mot-de-passe-long-et-unique"
     DUNKAPI_API_KEY = "YOUR_DUNKAPI_API_KEY"
     SUPABASE_DB_URL = "postgresql://postgres...."
     NBA_DB_SCHEMA = "nba"
@@ -29,7 +30,7 @@ L'ouverture de l'application ne déclenche aucune collecte. Les imports utilisen
     REQUEST_TIMEOUT_SECONDS = "60"
     REQUEST_INTERVAL_SECONDS = "1.05"
 
-SUPABASE_DB_URL doit être l'URI de connexion PostgreSQL obtenue dans Supabase → **Connect** → **Session Pooler**. Ce n'est pas la clé API service_role. Ne mettez jamais les secrets dans un fichier suivi par Git ou dans le code source.
+SUPABASE_DB_URL doit être l'URI de connexion PostgreSQL obtenue dans Supabase → **Connect** → **Session Pooler**. Ce n'est pas la clé API service_role. APP_ACCESS_PASSWORD est obligatoire : l'application reste bloquée s'il n'est pas défini. Choisissez un mot de passe long et unique. Ne mettez jamais les secrets dans un fichier suivi par Git ou dans le code source.
 
 Le fichier requirements.txt est situé dans le même dossier que streamlit_app.py, afin que Streamlit Cloud installe les dépendances de l'application.
 
