@@ -12,6 +12,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 
+COLLECTION_ADVISORY_LOCK_KEY = 731904271
+
+
 EXPECTED_COLUMNS = {
     "nba_teams": {"team_provider_id", "abbreviation", "display_name", "conference", "division", "is_active", "source_provider", "source_updated_at"},
     "nba_games": {"game_provider_id", "season_end_year", "season_type", "game_date", "scheduled_tipoff_at", "game_status", "home_team_provider_id", "away_team_provider_id", "home_score", "away_score"},
@@ -105,6 +108,25 @@ class SupabaseDatabase:
     def close(self) -> None:
         self.conn.close()
 
+    def try_acquire_collection_lock(self) -> bool:
+        """Acquire one database-wide session lock for the whole NBA collection."""
+        row = self.conn.execute(
+            "SELECT pg_try_advisory_lock(%s) AS acquired",
+            (COLLECTION_ADVISORY_LOCK_KEY,),
+        ).fetchone()
+        self.conn.commit()
+        return bool(row and row["acquired"])
+
+    def release_collection_lock(self) -> None:
+        """Release the global collection lock; closing the connection also releases it."""
+        row = self.conn.execute(
+            "SELECT pg_advisory_unlock(%s) AS released",
+            (COLLECTION_ADVISORY_LOCK_KEY,),
+        ).fetchone()
+        self.conn.commit()
+        if not row or not row["released"]:
+            raise RuntimeError("The NBA collection lock was not held by this database session.")
+
     @contextmanager
     def transaction(self) -> Iterator[psycopg.Connection]:
         with self.conn.transaction():
@@ -170,13 +192,16 @@ class SupabaseDatabase:
                     updated += 1
         return inserted, updated
 
-    def start_ingestion(self, endpoint: str, params: dict[str, Any]) -> int:
+    def start_ingestion(
+        self, endpoint: str, params: dict[str, Any], collection_id: str | None = None
+    ) -> int:
+        run_metadata = {"collection_id": collection_id} if collection_id else {}
         row = self.conn.execute(
             sql.SQL("""insert into {}.nba_ingestion_runs
-                (source_provider, endpoint_name, request_params, run_status)
-                values ('dunkapi', %s, %s, 'started')
+                (source_provider, endpoint_name, request_params, run_status, metadata)
+                values ('dunkapi', %s, %s, 'started', %s)
                 returning ingestion_run_id""").format(sql.Identifier(self.schema)),
-            (endpoint, Jsonb(params)),
+            (endpoint, Jsonb(params), Jsonb(run_metadata)),
         ).fetchone()
         self.conn.commit()
         return int(row["ingestion_run_id"])
@@ -203,7 +228,7 @@ class SupabaseDatabase:
             sql.SQL("""update {}.nba_ingestion_runs
                 set run_status = 'succeeded', completed_at = now(),
                     records_received = %s, records_inserted = %s,
-                    records_updated = %s, credits_estimated = %s, metadata = %s
+                    records_updated = %s, credits_estimated = %s, metadata = coalesce(metadata, '{}'::jsonb) || %s
                 where ingestion_run_id = %s""").format(sql.Identifier(self.schema)),
             (records_received, records_inserted, records_updated, credits, Jsonb(metadata or {}), run_id),
         )
