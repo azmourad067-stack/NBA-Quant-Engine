@@ -110,3 +110,5 @@ Depuis `nba_quant_engine_collector/nba_quant_engine` :
 Cette commande lit uniquement Supabase. Elle ne nécessite pas de clé DunkAPI et ne lance aucune collecte. La page **Moteur prédictif** du dashboard effectue le même calcul en lecture seule.
 
 Le seuil par défaut est de 100 matchs d'entraînement, plus un échantillon de test. En dessous, le moteur renvoie `insufficient_history` et ne prétend pas avoir entraîné un modèle. La v0.1 est une baseline de recherche : pas encore de calibration, de modèle joueur, de backtest de mises ni de preuve de rentabilité. Les métriques hors-échantillon doivent être accumulées sur un historique plus large avant toute utilisation opérationnelle.
+
+La v0.1 inclut aussi l'inférence sur les rencontres au statut `scheduled` : le modèle est réentraîné sur tous les matchs terminés disponibles et produit les probabilités domicile/extérieur uniquement si le seuil d'historique est atteint. Les rencontres à venir ne sont jamais ajoutées à l'historique ni au calcul des labels.
