@@ -237,8 +237,17 @@ class NBACollector:
         self.sync_teams(season_list[-1])
         games = self.sync_games(season_list, season_type, max_games, status_filter=status_filter)
         completed_games = [game for game in games if game["game_status"] == "final"]
+        games_to_enrich: list[dict[str, Any]] = []
         if include_stats and completed_games:
-            self.sync_game_details(completed_games)
+            missing_ids = self.db.games_missing_details(
+                [str(game["game_provider_id"]) for game in completed_games]
+            )
+            games_to_enrich = [
+                game for game in completed_games
+                if str(game["game_provider_id"]) in missing_ids
+            ]
+            if games_to_enrich:
+                self.sync_game_details(games_to_enrich)
         if include_odds:
             self.sync_odds(games)
         return {
@@ -247,7 +256,8 @@ class NBACollector:
             "season_type": season_type,
             "status_filter": status_filter or "all",
             "games_selected": len(games),
-            "completed_games_for_stats": len(completed_games),
+            "completed_games_for_stats": len(games_to_enrich),
+            "games_skipped_existing_details": len(completed_games) - len(games_to_enrich),
             "credits_used_local_estimate": self.budget.used,
             "credits_remaining_in_run_budget": self.budget.remaining,
             **self.totals,
