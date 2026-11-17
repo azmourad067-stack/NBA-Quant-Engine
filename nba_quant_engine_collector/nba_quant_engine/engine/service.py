@@ -13,6 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from .dataset import FEATURE_COLUMNS, aggregate_verified_market_probabilities, build_feature_rows
 
 MIN_TRAIN_GAMES = 100
+MIN_TEST_GAMES = 25
 
 
 def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
@@ -52,10 +53,10 @@ def load_engine_dataset(db: Any) -> list[dict[str, Any]]:
 def evaluate_dataset(rows: list[dict[str, Any]], min_train_games: int = MIN_TRAIN_GAMES) -> dict[str, Any]:
     usable = [r for r in rows if r.get("target_home_win") in (0, 1)]
     n = len(usable)
-    if n <= min_train_games:
+    if n < min_train_games + MIN_TEST_GAMES:
         return {
-            "status": "insufficient_history", "games": n, "minimum_required": min_train_games + 1,
-            "message": f"Historique insuffisant : {n} matchs terminés ; au moins {min_train_games + 1} requis.",
+            "status": "insufficient_history", "games": n, "minimum_required": min_train_games + MIN_TEST_GAMES,
+            "message": f"Historique insuffisant : {n} matchs terminés ; au moins {min_train_games + MIN_TEST_GAMES} requis.",
             "metrics": {}, "predictions": [],
         }
     split = max(min_train_games, int(n * 0.8))
