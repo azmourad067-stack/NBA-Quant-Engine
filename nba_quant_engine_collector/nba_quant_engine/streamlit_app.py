@@ -272,7 +272,7 @@ def render_header() -> None:
         """
         <div class="hero">
           <h1>🏀 NBA Quant Engine</h1>
-          <p>Collecte, contrôle de la qualité des données et suivi des imports NBA.</p>
+          <p>Données NBA, probabilités pré-match et suivi des imports.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -627,6 +627,7 @@ def main() -> None:
         )
         st.divider()
         st.caption("NBA Quant Engine · DunkAPI → Supabase")
+        st.caption("Build : " + APP_BUILD_LABEL)
         st.caption("Schéma cible : nba")
 
     try:
