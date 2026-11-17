@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
 
-APP_BUILD_LABEL = "nba-historical-resumable-pagination-v0.4-2026-11-17"
+APP_BUILD_LABEL = "nba-boxscore-only-backfill-v0.5-2026-11-17"
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -195,6 +195,7 @@ def run_collection(
     include_stats: bool,
     include_odds: bool,
     collection_id: str,
+    backfill_details_only: bool = False,
 ) -> dict[str, Any]:
     budget = CreditBudget(max_credits)
     api = DunkAPIClient(
@@ -223,6 +224,7 @@ def run_collection(
             include_stats=include_stats,
             include_odds=include_odds,
             status_filter=None if status == "all" else status,
+            backfill_details_only=backfill_details_only,
         )
     finally:
         api.close()
@@ -489,24 +491,33 @@ def render_collector(settings: Settings) -> None:
                 help="Le collecteur s'arrête avant tout appel estimé à dépasser ce plafond.",
             )
 
-        include_stats = st.checkbox(
-            "Importer les box-scores (matchs terminés uniquement)", value=True
+        backfill_details_only = st.checkbox(
+            "Mode box-scores uniquement (aucun appel list_teams / list_games)",
+            value=True,
+            help="Utilise les crédits exclusivement pour get_game sur les matchs terminés incomplets déjà présents dans Supabase.",
         )
-        include_odds = st.checkbox("Importer les cotes disponibles", value=False)
+        include_stats = st.checkbox(
+            "Importer les box-scores (matchs terminés uniquement)",
+            value=True,
+            disabled=backfill_details_only,
+        )
+        include_odds = st.checkbox(
+            "Importer les cotes disponibles",
+            value=False,
+            disabled=backfill_details_only,
+        )
         submitted = st.form_submit_button(
             "Lancer la collecte", type="primary", use_container_width=True
         )
 
     st.info(
-        "Préconfiguration historique : saisons régulières 2023–2024 à 2025–2026 incluses, "
-        "matchs terminés, jusqu'à 5 000 matchs parcourus par lancement, box-scores activés, "
-        "cotes désactivées et plafond de 120 crédits. Les pages de calendrier reprennent au "
-        "dernier offset sauvegardé dans nba_ingestion_runs. Le collecteur réserve 25 crédits "
-        "aux box-scores, puis enrichit en priorité les matchs terminés les plus anciens qui "
-        "n'ont pas encore leurs deux lignes équipes et leurs statistiques joueurs. Les matchs "
-        "déjà complets sont ignorés. Relancez la collecte pour poursuivre jusqu'à la fin des "
-        "trois saisons ; aucun doublon de match ou de box-score n'est attendu grâce aux clés "
-        "uniques et aux upserts. Les cotes historiques nécessitent une étape distincte."
+        "Backfill en cours : saisons régulières 2023–2024 à 2025–2026, matchs terminés. "
+        "Le mode box-scores uniquement est activé par défaut : il ne relance ni list_teams "
+        "ni list_games et utilise le budget pour get_game uniquement. Avec 120 crédits et "
+        "un coût observé de 5 crédits par match, il peut enrichir jusqu'à 24 matchs par "
+        "lancement. Les matchs sont pris du plus ancien au plus récent ; les box-scores "
+        "déjà complets sont exclus. Relancez le même traitement jusqu'à ce que le nombre "
+        "de matchs restants soit nul. Les cotes restent désactivées."
     )
 
     if submitted:
@@ -519,6 +530,7 @@ def render_collector(settings: Settings) -> None:
         submission_signature = (
             int(season_start), int(season_end), season_type, status, int(max_games),
             int(max_credits), bool(include_stats), bool(include_odds),
+            bool(backfill_details_only),
         )
         now = time.monotonic()
         previous = st.session_state.get("nba_last_collection_submission")
@@ -549,30 +561,40 @@ def render_collector(settings: Settings) -> None:
                     status=status,
                     max_games=int(max_games),
                     max_credits=int(max_credits),
-                    include_stats=include_stats,
-                    include_odds=include_odds,
+                    include_stats=True if backfill_details_only else include_stats,
+                    include_odds=False if backfill_details_only else include_odds,
                     collection_id=collection_id,
+                    backfill_details_only=backfill_details_only,
                 )
             st.success("Collecte terminée.")
             st.caption(f"Identifiant unique de collecte : {collection_id}")
             result_cols = st.columns(4)
-            result_cols[0].metric("Matchs parcourus", report["games_selected"])
-            result_cols[1].metric("Pages calendrier", report["games_pages"])
-            result_cols[2].metric("Box-scores enrichis", report["completed_games_for_stats"])
-            result_cols[3].metric("Crédits estimés", report["credits_used_local_estimate"])
-            if report["pagination_complete"]:
-                st.success("Pagination terminée : toutes les saisons sélectionnées ont été parcourues.")
+            if report["backfill_details_only"]:
+                result_cols[0].metric("Backlog avant collecte", report["games_backlog_before"])
+                result_cols[1].metric("Box-scores enrichis", report["completed_games_for_stats"])
+                result_cols[2].metric("Matchs restants", report["final_games_pending_details"])
+                result_cols[3].metric("Crédits estimés", report["credits_used_local_estimate"])
+                st.success("Aucun appel list_teams ou list_games effectué : le budget a été réservé aux box-scores.")
             else:
-                pending = ", ".join(str(season) for season in report["seasons_pending_pagination"])
-                st.warning(
-                    f"Pagination incomplète pour les saisons {pending}. "
-                    "Relancez la même collecte : elle reprendra aux offsets sauvegardés."
-                )
+                result_cols[0].metric("Matchs parcourus", report["games_selected"])
+                result_cols[1].metric("Pages calendrier", report["games_pages"])
+                result_cols[2].metric("Box-scores enrichis", report["completed_games_for_stats"])
+                result_cols[3].metric("Crédits estimés", report["credits_used_local_estimate"])
+                if report["pagination_complete"]:
+                    st.success("Pagination terminée : toutes les saisons sélectionnées ont été parcourues.")
+                else:
+                    pending = ", ".join(str(season) for season in report["seasons_pending_pagination"])
+                    st.warning(
+                        f"Pagination incomplète pour les saisons {pending}. "
+                        "Relancez la même collecte : elle reprendra aux offsets sauvegardés."
+                    )
             if report["final_games_pending_details"]:
                 st.info(
                     f"{report['final_games_pending_details']} matchs terminés restent à enrichir "
                     "en box-scores. Ils seront repris lors des prochaines collectes."
                 )
+            else:
+                st.success("Tous les matchs terminés de la plage sélectionnée disposent de leurs box-scores.")
             with st.expander("Rapport détaillé", expanded=True):
                 st.json(report)
             st.caption(
