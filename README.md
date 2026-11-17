@@ -40,3 +40,8 @@ Utiliser l'URI PostgreSQL obtenue dans Supabase → Connect → Session Pooler. 
 L'ouverture du tableau de bord ne déclenche aucune collecte. Commencer par un petit lot et vérifier les données et les crédits consommés avant d'augmenter la charge.
 
 Voir nba_quant_engine_collector/nba_quant_engine/README.md pour les instructions locales détaillées et les règles d'intégrité des données.
+
+
+## Moteur prédictif
+
+La branche `feature/streamlit-dashboard` inclut une première baseline pré-match (features chronologiques, Elo, forme équipe, cotes moneyline PIT, validation temporelle 80/20). Elle est accessible depuis la page **Moteur prédictif** ou via `python -m engine.cli --min-train-games 100` depuis `nba_quant_engine_collector/nba_quant_engine`. Le moteur lit Supabase uniquement et ne lance aucune collecte DunkAPI. Voir le README du sous-projet pour les limites et règles anti-fuite.
