@@ -29,3 +29,45 @@ def test_handles_uri_without_query_parameters():
     dsn = "postgresql://user:password@host:5432/postgres"
 
     assert psycopg_compatible_dsn(dsn) == dsn
+
+
+def test_removes_dns_hostname_from_hostaddr_but_keeps_host_and_sslmode():
+    dsn = (
+        "postgresql://user:password@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
+        "?hostaddr=aws-1-eu-west-1.pooler.supabase.com&sslmode=require"
+    )
+
+    assert psycopg_compatible_dsn(dsn) == (
+        "postgresql://user:password@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
+        "?sslmode=require"
+    )
+
+
+def test_removes_invalid_hostaddr_and_pgbouncer_together():
+    dsn = (
+        "postgresql://user:password@pooler.example.com:6543/postgres"
+        "?pgbouncer=true&hostaddr=pooler.example.com&sslmode=require"
+    )
+
+    assert psycopg_compatible_dsn(dsn) == (
+        "postgresql://user:password@pooler.example.com:6543/postgres"
+        "?sslmode=require"
+    )
+
+
+def test_keeps_valid_ipv4_hostaddr():
+    dsn = (
+        "postgresql://user:password@pooler.example.com:6543/postgres"
+        "?hostaddr=192.0.2.10&sslmode=require"
+    )
+
+    assert psycopg_compatible_dsn(dsn) == dsn
+
+
+def test_keeps_valid_ipv6_hostaddr():
+    dsn = (
+        "postgresql://user:password@pooler.example.com:6543/postgres"
+        "?hostaddr=%5B2001%3Adb8%3A%3A1%5D&sslmode=require"
+    )
+
+    assert psycopg_compatible_dsn(dsn) == dsn
