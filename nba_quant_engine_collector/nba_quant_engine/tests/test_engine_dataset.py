@@ -27,3 +27,15 @@ def test_market_odds_after_tipoff_or_unverified_are_excluded():
     ]
     result = aggregate_verified_market_probabilities(odds, {"g1": "2026-01-01T20:00:00Z"})
     assert result == {"g1": 0.5}
+
+
+def test_scheduled_game_is_emitted_without_using_its_result():
+    games = [
+        {"game_provider_id": "g1", "scheduled_tipoff_at": "2026-01-01T20:00:00Z", "game_status": "final", "home_team_provider_id": "A", "away_team_provider_id": "B", "home_score": 110, "away_score": 100},
+        {"game_provider_id": "future", "scheduled_tipoff_at": "2026-01-03T20:00:00Z", "game_status": "scheduled", "home_team_provider_id": "A", "away_team_provider_id": "C", "home_score": None, "away_score": None},
+    ]
+    rows = build_feature_rows(games, [], include_upcoming=True)
+    assert len(rows) == 2
+    assert rows[1]["game_provider_id"] == "future"
+    assert rows[1]["target_home_win"] is None
+    assert rows[1]["home_win_rate_last5"] == 1.0
