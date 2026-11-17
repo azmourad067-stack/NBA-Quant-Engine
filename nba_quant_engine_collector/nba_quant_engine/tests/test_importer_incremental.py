@@ -213,3 +213,68 @@ def test_sync_games_preserves_reserved_credits_for_box_scores() -> None:
     assert calls == [0, 100, 200]
     assert budget.used == 6
     assert budget.remaining == 6
+
+
+def test_boxscore_only_mode_skips_calendar_and_team_calls_and_uses_full_budget() -> None:
+    missing_ids = {f"game-{index:02d}" for index in range(27)}
+    db = FakeDatabase(missing_ids, pagination_state={
+        2024: {"next_offset": 1220, "complete": True},
+        2025: {"next_offset": 1230, "complete": True},
+        2026: {"next_offset": 1230, "complete": True},
+    })
+    budget = CreditBudget(120)
+    collector = NBACollector(api=None, db=db, budget=budget)
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("box-score-only mode must not call list_teams or list_games")
+
+    collector.sync_teams = should_not_run
+    collector.sync_games = should_not_run
+    fetched: list[str] = []
+
+    def fake_sync_details(selected):
+        fetched.extend(str(game["game_provider_id"]) for game in selected)
+        budget.record(5 * len(selected))
+        db.missing_ids.difference_update(fetched)
+
+    collector.sync_game_details = fake_sync_details
+
+    report = collector.collect(
+        seasons=range(2024, 2027),
+        season_type="regular",
+        max_games=5000,
+        include_stats=True,
+        include_odds=False,
+        status_filter="final",
+        backfill_details_only=True,
+    )
+
+    assert len(fetched) == 24
+    assert report["backfill_details_only"] is True
+    assert report["games_selected"] == 0
+    assert report["games_pages"] == 0
+    assert report["games_backlog_before"] == 27
+    assert report["completed_games_for_stats"] == 24
+    assert report["final_games_pending_details"] == 3
+    assert report["pagination_complete"] is True
+    assert report["credits_used_local_estimate"] == 120
+    assert budget.remaining == 0
+
+
+def test_boxscore_only_mode_rejects_odds_calls() -> None:
+    db = FakeDatabase({"game-1"})
+    collector = NBACollector(api=None, db=db, budget=CreditBudget(120))
+
+    try:
+        collector.collect(
+            seasons=range(2024, 2025),
+            max_games=10,
+            include_stats=True,
+            include_odds=True,
+            status_filter="final",
+            backfill_details_only=True,
+        )
+    except ValueError as exc:
+        assert "cannot request odds" in str(exc)
+    else:
+        raise AssertionError("box-score-only mode must reject odds requests")
