@@ -80,8 +80,11 @@ def load_streamlit_secrets() -> None:
         secrets = st.secrets
         for name in secret_names:
             value = secrets.get(name)
-            if value is not None and str(value).strip() and not os.getenv(name):
-                os.environ[name] = str(value).strip()
+            if value is not None and str(value).strip():
+                # Streamlit Cloud Secrets are the canonical source for the hosted app.
+                # In particular, prefer SUPABASE_DB_URL over a stale process environment value.
+                if name == "SUPABASE_DB_URL" or not os.getenv(name):
+                    os.environ[name] = str(value).strip()
     except Exception:
         # Local .env remains supported; missing Streamlit secrets are handled below.
         return
