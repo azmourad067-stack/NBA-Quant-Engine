@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
 
-APP_BUILD_LABEL = "nba-pregame-engine-v0.2-phase-b-incremental-boxscores-2026-11-17"
+APP_BUILD_LABEL = "nba-pregame-engine-v0.3-historical-credit-safe-2026-11-17"
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -444,18 +444,18 @@ def render_collector(settings: Settings) -> None:
         with c1:
             season_start = st.number_input(
                 "Première saison (année de fin)", min_value=2004, max_value=2035,
-                value=2027, step=1,
-                help="2027 correspond à la saison 2026–2027.",
+                value=2024, step=1,
+                help="2024 correspond à la saison 2023–2024. La borne de fin est incluse.",
             )
         with c2:
             season_end = st.number_input(
                 "Dernière saison incluse", min_value=2004, max_value=2035,
-                value=2027, step=1,
+                value=2026, step=1,
             )
         with c3:
             max_games = st.number_input(
                 "Nombre maximal de matchs", min_value=1, max_value=100,
-                value=25, step=1,
+                value=20, step=1,
             )
 
         d1, d2, d3 = st.columns(3)
@@ -497,10 +497,11 @@ def render_collector(settings: Settings) -> None:
         )
 
     st.info(
-        "Préconfiguration phase B : saison 2026–2027, matchs terminés, 25 matchs maximum, "
-        "box-scores activés, cotes désactivées et plafond de 120 crédits. "
-        "Les box-scores déjà complets sont ignorés pour éviter des appels DunkAPI inutiles. "
-        "Vérifiez ces paramètres avant de lancer la collecte."
+        "Préconfiguration historique : saisons 2023–2024 à 2025–2026 incluses, matchs terminés, "
+        "20 matchs maximum, box-scores activés, cotes désactivées et plafond de 120 crédits. "
+        "Les matchs et box-scores déjà présents sont réutilisés ; les appels de détails sont "
+        "plafonnés selon les crédits restants. Une collecte interrompue par le plafond peut être "
+        "reprise plus tard sans recréer les mêmes matchs. Vérifiez ces paramètres avant de lancer."
     )
 
     if submitted:
