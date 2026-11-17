@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
+from uuid import uuid4
 from typing import Any
 
 from .api import CreditBudget, DunkAPIClient
@@ -19,7 +20,11 @@ from .mappings import (
 
 
 class NBACollector:
-    def __init__(self, api: DunkAPIClient, db: SupabaseDatabase, budget: CreditBudget) -> None:
+    def __init__(
+        self, api: DunkAPIClient, db: SupabaseDatabase, budget: CreditBudget,
+        collection_id: str | None = None,
+    ) -> None:
+        self.collection_id = collection_id or str(uuid4())
         self.api = api
         self.db = db
         self.budget = budget
@@ -32,7 +37,7 @@ class NBACollector:
         writer,
         fallback_credits: int,
     ) -> tuple[dict[str, Any], int]:
-        run_id = self.db.start_ingestion(endpoint, params)
+        run_id = self.db.start_ingestion(endpoint, params, self.collection_id)
         try:
             data, headers = self.api.post(endpoint, params)
             inserted, updated, received, metadata = writer(data, run_id)
@@ -44,7 +49,7 @@ class NBACollector:
                 records_inserted=inserted,
                 records_updated=updated,
                 credits=actual_credits,
-                metadata=metadata,
+                metadata={**metadata, "collection_id": self.collection_id},
             )
             return data, actual_credits
         except Exception as exc:
@@ -234,6 +239,7 @@ class NBACollector:
         if include_odds:
             self.sync_odds(games)
         return {
+            "collection_id": self.collection_id,
             "season_end_years": season_list,
             "season_type": season_type,
             "status_filter": status_filter or "all",
