@@ -21,13 +21,14 @@ Les dépendances principales sont déclarées dans le requirements.txt de la rac
 
 Dans App → Settings → Secrets, ajouter :
 
+    APP_ACCESS_PASSWORD = "un-mot-de-passe-long-et-unique"
     DUNKAPI_API_KEY = "YOUR_DUNKAPI_API_KEY"
     SUPABASE_DB_URL = "postgresql://postgres...."
     NBA_DB_SCHEMA = "nba"
     DUNKAPI_BASE_URL = "https://mcp.dunkapi.com"
     MAX_CREDITS_PER_RUN = "350"
 
-Utiliser l'URI PostgreSQL obtenue dans Supabase → Connect → Session Pooler. Ne jamais utiliser ni publier la clé service_role à la place de cette URI. Ne jamais committer les secrets.
+Utiliser l'URI PostgreSQL obtenue dans Supabase → Connect → Session Pooler. Ne jamais utiliser ni publier la clé service_role à la place de cette URI. Le mot de passe APP_ACCESS_PASSWORD est obligatoire : l'application refuse de s'ouvrir tant qu'il n'est pas défini. Ne jamais committer les secrets.
 
 ## Fonctions actuelles
 
