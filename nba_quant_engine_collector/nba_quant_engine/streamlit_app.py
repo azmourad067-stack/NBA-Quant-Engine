@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
 
-APP_BUILD_LABEL = "streamlit-dashboard-dedup-lock-2026-11-17"
+APP_BUILD_LABEL = "nba-pregame-engine-v0.1-2026-11-17"
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -23,6 +23,7 @@ from collector.api import CreditBudget, DunkAPIClient
 from collector.config import Settings
 from collector.db import EXPECTED_COLUMNS, SupabaseDatabase
 from collector.importer import NBACollector
+from engine.service import build_engine_report
 
 
 st.set_page_config(
@@ -564,6 +565,43 @@ def render_collector(settings: Settings) -> None:
             )
 
 
+
+def render_engine(settings: Settings) -> None:
+    """Read-only model diagnostics; no DunkAPI calls or database writes."""
+    from collector.db import SupabaseDatabase
+
+    st.subheader("Moteur prédictif pré-match · v0.1")
+    st.caption("Calcul en lecture seule depuis Supabase. Aucun appel DunkAPI ni écriture. Le moteur refuse l'entraînement si l'historique est trop court.")
+    min_train_games = st.number_input("Minimum de matchs avant entraînement", min_value=50, max_value=1000, value=100, step=50)
+    if st.button("Construire le dataset et évaluer le moteur", type="primary"):
+        db = None
+        try:
+            with st.spinner("Construction chronologique du dataset et évaluation…"):
+                db = SupabaseDatabase(settings.supabase_db_url, schema=settings.database_schema)
+                db.verify_schema()
+                report = build_engine_report(db, min_train_games=int(min_train_games))
+            dataset = report.get("dataset", {})
+            cols = st.columns(3)
+            cols[0].metric("Matchs terminés", dataset.get("games", report.get("games", 0)))
+            cols[1].metric("Variables pré-match", dataset.get("feature_count", 0))
+            cols[2].metric("Matchs avec cote PIT", dataset.get("market_feature_coverage", 0))
+            if report["status"] == "insufficient_history":
+                st.warning(report.get("message", "Historique insuffisant pour entraîner le modèle."))
+                st.info("Le moteur ne fabrique pas de modèle avec un échantillon trop petit. Enrichissez d'abord l'historique des matchs terminés et des cotes PIT.")
+            elif report["status"] == "evaluated":
+                st.success(f"Évaluation chronologique : {report['train_games']} matchs d'entraînement, puis {report['test_games']} matchs de test.")
+                st.json(report["metrics"])
+                if report.get("predictions"):
+                    st.dataframe(pd.DataFrame(report["predictions"]), use_container_width=True, hide_index=True)
+            else:
+                st.warning(f"Évaluation non disponible : {report['status']}")
+            st.caption("Anti-fuite : seules les cotes verified_point_in_time capturées strictement avant scheduled_tipoff_at sont admises. Une évaluation hors-échantillon n'est pas une preuve de rentabilité.")
+        except Exception as exc:
+            st.error(f"Construction du moteur impossible : {exc}")
+        finally:
+            if db is not None:
+                db.close()
+
 def main() -> None:
     load_streamlit_secrets()
     authenticate_app()
@@ -572,7 +610,7 @@ def main() -> None:
         st.markdown("## Navigation")
         page = st.radio(
             "Ouvrir",
-            ["Vue d'ensemble", "Collecteur"],
+            ["Vue d'ensemble", "Moteur prédictif", "Collecteur"],
             label_visibility="collapsed",
         )
         st.divider()
@@ -588,6 +626,8 @@ def main() -> None:
     try:
         if page == "Vue d'ensemble":
             render_overview(settings)
+        elif page == "Moteur prédictif":
+            render_engine(settings)
         else:
             render_collector(settings)
     except Exception as exc:
