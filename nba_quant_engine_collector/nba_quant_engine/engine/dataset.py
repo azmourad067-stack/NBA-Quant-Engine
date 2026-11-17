@@ -105,7 +105,7 @@ def build_feature_rows(
         h = _team_summary(histories[home_id], played_at)
         a = _team_summary(histories[away_id], played_at)
         elo_prob = 1.0 / (1.0 + 10.0 ** (-(elo[home_id] + home_advantage - elo[away_id]) / 400.0))
-        rows.append({
+        row = {
             "game_provider_id": game_id, "played_at": played_at.isoformat(),
             "home_team_provider_id": home_id, "away_team_provider_id": away_id,
             "home_score": int(game["home_score"]) if game.get("home_score") is not None else None,
@@ -124,7 +124,8 @@ def build_feature_rows(
             "home_assists_last5": h["assists"], "away_assists_last5": a["assists"],
             "home_turnovers_last5": h["turnovers"], "away_turnovers_last5": a["turnovers"],
             "market_home_prob": (market_home_prob or {}).get(game_id),
-        })
+        }
+        rows.append(row)
 
         # Upcoming games are prediction targets, never history updates.
         if row["target_home_win"] is None:
