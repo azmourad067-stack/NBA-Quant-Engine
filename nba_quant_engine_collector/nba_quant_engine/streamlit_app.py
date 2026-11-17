@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
 
-APP_BUILD_LABEL = "nba-pregame-engine-v0.1.1-ingestion-sql-fix-2026-11-17"
+APP_BUILD_LABEL = "nba-pregame-engine-v0.2-phase-b-incremental-boxscores-2026-11-17"
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
