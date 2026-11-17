@@ -474,7 +474,7 @@ def render_collector(settings: Settings) -> None:
             status = st.selectbox(
                 "Statut des matchs",
                 ["final", "scheduled", "all"],
-                index=1,
+                index=0,
                 format_func=lambda value: {
                     "final": "Terminés",
                     "scheduled": "À venir",
@@ -489,16 +489,17 @@ def render_collector(settings: Settings) -> None:
             )
 
         include_stats = st.checkbox(
-            "Importer les box-scores (matchs terminés uniquement)", value=False
+            "Importer les box-scores (matchs terminés uniquement)", value=True
         )
-        include_odds = st.checkbox("Importer les cotes disponibles", value=True)
+        include_odds = st.checkbox("Importer les cotes disponibles", value=False)
         submitted = st.form_submit_button(
             "Lancer la collecte", type="primary", use_container_width=True
         )
 
     st.info(
-        "Préconfiguration étape A : saison 2026–2027, matchs programmés, 25 matchs maximum, "
-        "box-scores désactivés, cotes activées et plafond de 120 crédits. "
+        "Préconfiguration phase B : saison 2026–2027, matchs terminés, 25 matchs maximum, "
+        "box-scores activés, cotes désactivées et plafond de 120 crédits. "
+        "Les box-scores déjà complets sont ignorés pour éviter des appels DunkAPI inutiles. "
         "Vérifiez ces paramètres avant de lancer la collecte."
     )
 
