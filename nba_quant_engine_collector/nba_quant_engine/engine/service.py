@@ -144,6 +144,7 @@ def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MI
             "predicted_at": predicted_at,
             "source_max_available_at": row.get("source_max_available_at"),
             "feature_source_game_ids": row.get("feature_source_game_ids", []),
+            "source_timestamp_verified": bool(row.get("source_timestamp_verified", False)),
             "model_name": MODEL_NAME,
             "model_version": MODEL_VERSION,
         })
@@ -172,7 +173,7 @@ def persist_upcoming_predictions(db: Any, predictions: list[dict[str, Any]]) -> 
                 (item["game_provider_id"], MODEL_VERSION, item["feature_cutoff_at"],
                  item["predicted_at"], item["source_max_available_at"], Jsonb(snapshot_features)),
             ).fetchone()
-            quality = "partial" if item["source_max_available_at"] is None else "verified"
+            quality = "verified" if item["source_timestamp_verified"] and item["source_max_available_at"] is not None else "partial"
             for selection, probability in (
                 ("home", item["home_win_probability"]),
                 ("away", item["away_win_probability"]),
@@ -188,7 +189,8 @@ def persist_upcoming_predictions(db: Any, predictions: list[dict[str, Any]]) -> 
                      item["feature_cutoff_at"], quality,
                      Jsonb({"elo_home_prob": item["elo_home_prob"],
                             "market_home_prob": item["market_home_prob"],
-                            "source_game_ids": item["feature_source_game_ids"]})),
+                            "source_game_ids": item["feature_source_game_ids"],
+                            "training_games": len(completed)})),
                 )
             saved += 1
     return saved
