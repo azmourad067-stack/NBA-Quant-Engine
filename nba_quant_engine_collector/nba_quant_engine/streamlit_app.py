@@ -4,9 +4,11 @@ import hmac
 import os
 import re
 import sys
+from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Any
 
+APP_BUILD_LABEL = "streamlit-dashboard-hostaddr-fix-2026-11-17"
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -259,6 +261,43 @@ def render_header() -> None:
     )
 
 
+
+def render_safe_connection_diagnostics() -> None:
+    """Show connection metadata only; never render credentials or query values."""
+    raw_dsn = os.getenv("SUPABASE_DB_URL", "").strip()
+    st.markdown("#### Diagnostic de connexion (sans identifiants)")
+    if not raw_dsn:
+        st.warning("SUPABASE_DB_URL est absent de l'environnement.")
+        return
+
+    try:
+        parts = urlsplit(raw_dsn)
+        query_keys = [key.lower() for key, _ in parse_qsl(parts.query, keep_blank_values=True)]
+        hostaddr_values = [
+            value for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key.lower() == "hostaddr"
+        ]
+        st.code(
+            "\n".join(
+                [
+                    f"Version application : {APP_BUILD_LABEL}",
+                    f"Type URI PostgreSQL : {parts.scheme or 'non détecté'}",
+                    f"Hôte : {parts.hostname or 'non détecté'}",
+                    f"Port : {parts.port or 'défaut PostgreSQL'}",
+                    f"Paramètre hostaddr dans l'URI : {'oui' if hostaddr_values else 'non'}",
+                    f"Paramètre pgbouncer dans l'URI : {'oui' if 'pgbouncer' in query_keys else 'non'}",
+                    f"Variable système PGHOSTADDR : {'présente' if os.getenv('PGHOSTADDR') else 'absente'}",
+                ]
+            ),
+            language="text",
+        )
+    except Exception:
+        st.warning(
+            "L'URI PostgreSQL n'a pas pu être analysée. Vérifiez qu'il s'agit bien de l'URI "
+            "complète copiée depuis Supabase → Connect, sans publier son contenu."
+        )
+
+
 def render_setup_help() -> None:
     st.error("Configuration incomplète : les identifiants DunkAPI et Supabase ne sont pas disponibles.")
     st.markdown(
@@ -488,9 +527,10 @@ def main() -> None:
     except Exception as exc:
         st.error(f"Connexion ou lecture impossible : {exc}")
         st.caption(
-            "Vérifiez l'URI PostgreSQL Supabase, les secrets Streamlit, l'accès réseau "
-            "au Session Pooler et la présence du schéma nba."
+            "Vérifiez que Streamlit déploie bien la branche feature/streamlit-dashboard "
+            "et que l'URI provient de Supabase → Connect → Session Pooler."
         )
+        render_safe_connection_diagnostics()
 
 
 if __name__ == "__main__":
