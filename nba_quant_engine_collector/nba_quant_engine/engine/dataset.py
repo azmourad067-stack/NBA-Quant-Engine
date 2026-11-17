@@ -134,7 +134,7 @@ def build_feature_rows(
             "computed_at": computed_at.isoformat(),
             "feature_source_game_ids": sorted({str(x.get("game_provider_id")) for team_id in (home_id, away_id) for x in histories[team_id]}),
             "source_max_available_at": max([x["available_at"] for team_id in (home_id, away_id) for x in histories[team_id] if x.get("available_at") is not None], default=None),
-            "source_timestamp_verified": bool([x for team_id in (home_id, away_id) for x in histories[team_id]) and all(x.get("source_timestamp_verified") for team_id in (home_id, away_id) for x in histories[team_id]),
+            "source_timestamp_verified": bool([x for team_id in (home_id, away_id) for x in histories[team_id]]) and all(x.get("source_timestamp_verified") for team_id in (home_id, away_id) for x in histories[team_id]),
         }
         rows.append(row)
 
