@@ -263,39 +263,59 @@ def render_header() -> None:
 
 
 def render_safe_connection_diagnostics() -> None:
-    """Show connection metadata only; never render credentials or query values."""
-    raw_dsn = os.getenv("SUPABASE_DB_URL", "").strip()
+    """Show safe connection metadata and isolate parsing failures without exposing secrets."""
     st.markdown("#### Diagnostic de connexion (sans identifiants)")
+    # Always show the deployed build, even when the DSN is malformed.
+    lines = [f"Version application : {APP_BUILD_LABEL}"]
+
+    raw_dsn = os.getenv("SUPABASE_DB_URL", "").strip()
+    lines.append(f"SUPABASE_DB_URL dans l'environnement : {'présente' if raw_dsn else 'absente'}")
+    try:
+        secrets = st.secrets
+        secret_dsn = secrets.get("SUPABASE_DB_URL")
+        secret_present = secret_dsn is not None and bool(str(secret_dsn).strip())
+    except Exception:
+        secret_present = False
+    lines.append(f"SUPABASE_DB_URL dans Streamlit Secrets : {'présente' if secret_present else 'absente ou inaccessible'}")
+    lines.append(f"Variable système PGHOSTADDR : {'présente' if os.getenv('PGHOSTADDR') else 'absente'}")
+    lines.append(f"Variable système PGHOST : {'présente' if os.getenv('PGHOST') else 'absente'}")
+    lines.append(f"Variable système PGSERVICE : {'présente' if os.getenv('PGSERVICE') else 'absente'}")
+
     if not raw_dsn:
-        st.warning("SUPABASE_DB_URL est absent de l'environnement.")
+        lines.append("Analyse URI : impossible, variable d'environnement absente")
+        st.code("\n".join(lines), language="text")
+        st.warning(
+            "Aucune URI n'est disponible dans l'environnement utilisé par l'application. "
+            "Vérifiez le nom SUPABASE_DB_URL dans App → Settings → Secrets."
+        )
         return
 
     try:
         parts = urlsplit(raw_dsn)
-        query_keys = [key.lower() for key, _ in parse_qsl(parts.query, keep_blank_values=True)]
-        hostaddr_values = [
-            value for key, value in parse_qsl(parts.query, keep_blank_values=True)
-            if key.lower() == "hostaddr"
-        ]
-        st.code(
-            "\n".join(
-                [
-                    f"Version application : {APP_BUILD_LABEL}",
-                    f"Type URI PostgreSQL : {parts.scheme or 'non détecté'}",
-                    f"Hôte : {parts.hostname or 'non détecté'}",
-                    f"Port : {parts.port or 'défaut PostgreSQL'}",
-                    f"Paramètre hostaddr dans l'URI : {'oui' if hostaddr_values else 'non'}",
-                    f"Paramètre pgbouncer dans l'URI : {'oui' if 'pgbouncer' in query_keys else 'non'}",
-                    f"Variable système PGHOSTADDR : {'présente' if os.getenv('PGHOSTADDR') else 'absente'}",
-                ]
-            ),
-            language="text",
-        )
-    except Exception:
-        st.warning(
-            "L'URI PostgreSQL n'a pas pu être analysée. Vérifiez qu'il s'agit bien de l'URI "
-            "complète copiée depuis Supabase → Connect, sans publier son contenu."
-        )
+        lines.append(f"Type URI PostgreSQL : {parts.scheme or 'non détecté'}")
+        try:
+            host = parts.hostname
+            lines.append(f"Hôte : {host or 'non détecté'}")
+        except ValueError as exc:
+            lines.append(f"Lecture de l'hôte : erreur {type(exc).__name__}")
+        try:
+            port = parts.port
+            lines.append(f"Port : {port if port is not None else 'défaut PostgreSQL'}")
+        except ValueError as exc:
+            lines.append(f"Lecture du port : erreur {type(exc).__name__}")
+        try:
+            query_keys = {key.lower() for key, _ in parse_qsl(parts.query, keep_blank_values=True)}
+            lines.append(f"Paramètre hostaddr dans l'URI : {'oui' if 'hostaddr' in query_keys else 'non'}")
+            lines.append(f"Paramètre pgbouncer dans l'URI : {'oui' if 'pgbouncer' in query_keys else 'non'}")
+        except Exception as exc:
+            lines.append(f"Lecture des paramètres URI : erreur {type(exc).__name__}")
+        lines.append("Analyse URI : terminée (valeurs confidentielles masquées)")
+    except Exception as exc:
+        # Do not print exception text: parser errors can contain fragments of the DSN.
+        lines.append(f"Analyse URI : échec ({type(exc).__name__})")
+        lines.append("Hôte/port : non disponibles")
+
+    st.code("\n".join(lines), language="text")
 
 
 def render_setup_help() -> None:
