@@ -53,9 +53,11 @@ Renseigner DUNKAPI_API_KEY et SUPABASE_DB_URL dans .env avant de lancer l'applic
 
 La CLI reste disponible. Pour lancer ou reprendre le backfill des saisons régulières 2023–2024 à 2025–2026 avec le plafond de 120 crédits :
 
-    python -m collector.cli --season-start 2024 --season-end 2026 --season-type regular --status final --max-games 5000 --max-credits 120 --skip-odds
+    python -m collector.cli --season-start 2024 --season-end 2026 --season-type regular --status final --max-games 5000 --max-credits 120 --boxscores-only
 
-Relancer exactement la même commande jusqu'à ce que le rapport indique que toutes les saisons sont parcourues et qu'il ne reste plus de matchs terminés à enrichir. Le collecteur reprend les offsets de pagination dans `nba_ingestion_runs`, et interroge le backlog en base pour détailler les matchs les plus anciens incomplets. Les box-scores complets ne sont pas redemandés. Le plafond est appliqué à chaque lancement, pas à l'ensemble des lancements.
+Le mode `--boxscores-only` ne lance aucun appel `list_teams` ou `list_games`. Il sélectionne directement les matchs terminés incomplets dans Supabase et consacre le budget à `get_game` uniquement. Avec le coût observé de 5 crédits par match, 120 crédits permettent jusqu'à 24 box-scores par lancement. Relancer exactement la même commande jusqu'à ce que `final_games_pending_details` soit égal à zéro. Les box-scores complets sont exclus et les upserts sont idempotents. Le plafond est appliqué à chaque lancement, pas à l'ensemble des lancements.
+
+Pour reprendre la collecte de calendriers et résultats, sans le mode box-scores uniquement, utiliser la commande historique paginée documentée en phase C.
 
 ## Import et intégrité des données
 
@@ -119,6 +121,19 @@ La préconfiguration du collecteur cible maintenant les saisons régulières 202
 - Les cotes sont désactivées dans cette étape : elles feront l'objet d'une collecte distincte, avec leur propre suivi de progression et leur coût. Les lignes horodatées après le tip-off ou sans heure source fiable ne sont jamais qualifiées de PIT.
 
 Le fournisseur documente `limit`, `offset` et `next_offset` pour `list_games`. Le paramètre saison utilise l'année de fin (2024 = 2023–2024). La reprise s'appuie sur ces curseurs et sur les upserts idempotents.
+
+## Phase D — backfill dédié des box-scores historiques
+
+Une fois la pagination des saisons 2023–2024 à 2025–2026 terminée, activer le mode **box-scores uniquement** dans Streamlit ou passer `--boxscores-only` à la CLI.
+
+- Aucun appel `list_teams` ni `list_games` n'est envoyé.
+- Les matchs terminés dont il manque au moins une des deux lignes équipes ou toutes les statistiques joueurs sont sélectionnés depuis Supabase, du plus ancien au plus récent.
+- Le budget complet est réservé aux appels `get_game` (coût de référence observé : 5 crédits par match).
+- À 120 crédits, le lot peut traiter jusqu'à 24 matchs. Le nombre maximal de matchs demandé reste un plafond de sécurité, pas une obligation.
+- Après chaque lancement, le rapport recalcule le backlog pour identifier les réponses fournisseur partielles. Relancer jusqu'à `final_games_pending_details = 0`.
+- Les clés primaires et les upserts évitent les doublons ; les box-scores déjà complets sont ignorés.
+
+Les cotes restent désactivées pendant cette phase. Les prix historiques seront contrôlés séparément, sans promouvoir des cotes post-match ou sans horodatage fiable au statut PIT.
 
 ## Moteur prédictif pré-match v0.1
 
