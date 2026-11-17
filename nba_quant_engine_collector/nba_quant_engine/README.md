@@ -88,3 +88,25 @@ Les tests existants couvrent les mappings DunkAPI → Supabase, les conversions 
 ## Couverture fournisseur
 
 La documentation DunkAPI décrit des matchs et box-scores historiques depuis 2003–04, mais l'historique des cotes commence en 2013–14 avec des périodes et marchés incomplets. Les rapports de blessures ne peuvent être collectés qu'à partir du lancement de leur collecte. Vérifier le catalogue de données du fournisseur avant de planifier un import historique massif : https://dunkapi.com/data.
+
+
+## Moteur prédictif pré-match v0.1
+
+Une première chaîne de modélisation est disponible dans `engine/` :
+
+- dataset chronologique par match, sans utiliser les statistiques du match à prédire ;
+- variables équipe : Elo pré-match, forme des cinq derniers matchs, points pour/contre, adresse, rebonds, passes, pertes de balle et jours de repos ;
+- probabilité moneyline sans marge, calculée à partir de paires de cotes par bookmaker ;
+- filtre strict : `snapshot_time_quality = 'verified_point_in_time'` et `source_captured_at < scheduled_tipoff_at` ;
+- baseline Logistic Regression avec imputation et standardisation ajustées sur l'entraînement ;
+- séparation chronologique 80/20 et comparaison Brier Score avec Elo et marché lorsque disponibles.
+
+### Exécution
+
+Depuis `nba_quant_engine_collector/nba_quant_engine` :
+
+    python -m engine.cli --min-train-games 100
+
+Cette commande lit uniquement Supabase. Elle ne nécessite pas de clé DunkAPI et ne lance aucune collecte. La page **Moteur prédictif** du dashboard effectue le même calcul en lecture seule.
+
+Le seuil par défaut est de 100 matchs d'entraînement, plus un échantillon de test. En dessous, le moteur renvoie `insufficient_history` et ne prétend pas avoir entraîné un modèle. La v0.1 est une baseline de recherche : pas encore de calibration, de modèle joueur, de backtest de mises ni de preuve de rentabilité. Les métriques hors-échantillon doivent être accumulées sur un historique plus large avant toute utilisation opérationnelle.
