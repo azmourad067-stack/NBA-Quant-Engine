@@ -595,6 +595,17 @@ def render_engine(settings: Settings) -> None:
                     st.dataframe(pd.DataFrame(report["predictions"]), use_container_width=True, hide_index=True)
             else:
                 st.warning(f"Évaluation non disponible : {report['status']}")
+            upcoming = report.get("upcoming", {})
+            st.divider()
+            st.markdown("#### Prochains matchs")
+            if upcoming.get("status") == "predicted":
+                st.dataframe(pd.DataFrame(upcoming["predictions"]), use_container_width=True, hide_index=True)
+            elif upcoming.get("status") == "insufficient_history":
+                st.info(f"Aucune probabilité future publiée : {upcoming.get('games', 0)} matchs terminés disponibles, historique minimum requis : {min_train_games}.")
+            elif upcoming.get("status") == "no_upcoming_games":
+                st.caption("Aucun match au statut scheduled à prédire.")
+            else:
+                st.caption("Prédictions futures non disponibles pour le moment.")
             st.caption("Anti-fuite : seules les cotes verified_point_in_time capturées strictement avant scheduled_tipoff_at sont admises. Une évaluation hors-échantillon n'est pas une preuve de rentabilité.")
         except Exception as exc:
             st.error(f"Construction du moteur impossible : {exc}")
