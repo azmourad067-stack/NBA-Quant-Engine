@@ -147,6 +147,7 @@ def predict_upcoming_games(rows: list[dict[str, Any]], min_train_games: int = MI
             "source_timestamp_verified": bool(row.get("source_timestamp_verified", False)),
             "model_name": MODEL_NAME,
             "model_version": MODEL_VERSION,
+            "training_games": len(completed),
         })
     if db is not None:
         persist_upcoming_predictions(db, predictions)
@@ -190,7 +191,7 @@ def persist_upcoming_predictions(db: Any, predictions: list[dict[str, Any]]) -> 
                      Jsonb({"elo_home_prob": item["elo_home_prob"],
                             "market_home_prob": item["market_home_prob"],
                             "source_game_ids": item["feature_source_game_ids"],
-                            "training_games": len(completed)})),
+                            "training_games": item["training_games"]})),
                 )
             saved += 1
     return saved
