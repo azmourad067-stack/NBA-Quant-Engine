@@ -134,6 +134,7 @@ def build_feature_rows(
             "computed_at": computed_at.isoformat(),
             "feature_source_game_ids": sorted({str(x.get("game_provider_id")) for team_id in (home_id, away_id) for x in histories[team_id]}),
             "source_max_available_at": max([x["available_at"] for team_id in (home_id, away_id) for x in histories[team_id] if x.get("available_at") is not None], default=None),
+            "source_timestamp_verified": bool([x for team_id in (home_id, away_id) for x in histories[team_id]) and all(x.get("source_timestamp_verified") for team_id in (home_id, away_id) for x in histories[team_id]),
         }
         rows.append(row)
 
@@ -156,6 +157,7 @@ def build_feature_rows(
                 "played_at": played_at, "win": win,
                 "game_provider_id": game_id,
                 "available_at": max([x for x in (_as_datetime(own.get("source_available_at")), _as_datetime(own.get("ingested_at"))) if x is not None], default=None),
+                "source_timestamp_verified": own.get("source_available_at") is not None,
                 "points_for": game["home_score"] if team_id == home_id else game["away_score"],
                 "points_against": game["away_score"] if team_id == home_id else game["home_score"],
                 "fgm": own.get("field_goals_made"), "fga": own.get("field_goals_attempted"),
