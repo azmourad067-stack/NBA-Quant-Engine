@@ -63,6 +63,7 @@ def test_persistence_writes_one_snapshot_and_two_sided_predictions():
         "source_max_available_at": "2026-11-17T14:00:00+00:00",
         "feature_source_game_ids": ["old-1", "old-2"],
         "source_timestamp_verified": True,
+        "training_pit_verified": True,
         "elo_home_prob": 0.55,
         "market_home_prob": None,
     }
